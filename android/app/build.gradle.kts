@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "kz.bcc.bcc_adapt"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = maxOf(flutter.compileSdkVersion, 37)
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
