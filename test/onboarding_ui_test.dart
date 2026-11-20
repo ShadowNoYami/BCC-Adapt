@@ -114,8 +114,8 @@ void main() {
           .setContrastMode(ContrastMode.highContrastDark);
       await tester.pumpAndSettle();
 
-      expect(find.text('Настроить удобный интерфейс и голос'), findsOneWidget);
-      expect(find.text('Продолжить в обычном режиме'), findsOneWidget);
+      expect(find.text('Настроить банк для себя'), findsOneWidget);
+      expect(find.text('Продолжить без настройки'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
@@ -163,7 +163,7 @@ void main() {
       );
 
       // Step 1: tap 3rd high-contrast card (2.0x scale)
-      final maxCard = find.text('Максимально крупный и контрастный');
+      final maxCard = find.text('Самый крупный текст');
       await tester.ensureVisible(maxCard);
       await tester.tap(maxCard);
       await tester.pumpAndSettle();
@@ -183,10 +183,10 @@ void main() {
       await tester.tap(nextBtn);
       await tester.pumpAndSettle();
 
-      expect(find.text('Нажмите сюда для проверки'), findsOneWidget);
+      expect(find.text('Нажмите сюда'), findsOneWidget);
 
       // Choose tremor protection explicitly
-      final tremorOption = find.textContaining('при дрожании рук');
+      final tremorOption = find.text('Крупные кнопки с защитой');
       await tester.ensureVisible(tremorOption);
       await tester.tap(tremorOption);
       await tester.pumpAndSettle();
@@ -224,7 +224,7 @@ void main() {
         isTrue,
       );
 
-      expect(find.textContaining('Доступ к микрофону не предоставлен'), findsOneWidget);
+      expect(find.textContaining('Микрофон недоступен'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
@@ -255,10 +255,10 @@ void main() {
       // Step 1 of 2: phone only visible
       expect(find.text('Шаг 1 из 2'), findsOneWidget);
       expect(find.text('Номер телефона'), findsOneWidget);
-      expect(find.text('ИИН / Код из SMS'), findsNothing);
+      expect(find.text('Код из SMS или ИИН'), findsNothing);
 
       // Fill demo data
-      final fillBtn = find.text('Заполнить тестовыми данными');
+      final fillBtn = find.text('Заполнить примером');
       await tester.ensureVisible(fillBtn);
       await tester.tap(fillBtn);
       await tester.pumpAndSettle();
@@ -270,7 +270,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Шаг 2 из 2'), findsOneWidget);
-      expect(find.text('ИИН / Код из SMS'), findsOneWidget);
+      expect(find.text('Код из SMS или ИИН'), findsOneWidget);
       expect(find.text('Войти в BCC'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
@@ -342,6 +342,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(WelcomeScreen), findsOneWidget);
+      expect(
+        Navigator.of(tester.element(find.byType(WelcomeScreen))).canPop(),
+        isFalse,
+      );
 
       // Ensure pending zero-touch timer on WelcomeScreen fires cleanly without leaking
       await tester.pump(const Duration(seconds: 5));

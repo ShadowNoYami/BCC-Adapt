@@ -10,6 +10,7 @@ import '../../../core/theme/adaptive_tokens.dart';
 import '../../../core/voice/application/voice_accessibility_service.dart';
 import '../../../shared/widgets/adaptive_action_button.dart';
 import '../../../shared/widgets/adaptive_card.dart';
+import '../../../shared/widgets/adaptive_text_field.dart';
 import '../../../shared/widgets/voice_guide_header.dart';
 
 /// Screen 3: Adaptive registration / quick sign-in screen.
@@ -32,6 +33,7 @@ class _AdaptiveRegistrationScreenState
     extends ConsumerState<AdaptiveRegistrationScreen> {
   final _phoneController = TextEditingController();
   final _codeController = TextEditingController();
+  final _scrollController = ScrollController();
 
   int _step = 0; // Used when cognitiveMode is simplified / guided.
   String? _errorText;
@@ -51,6 +53,7 @@ class _AdaptiveRegistrationScreenState
     _voiceService.stopAll();
     _phoneController.dispose();
     _codeController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -62,10 +65,7 @@ class _AdaptiveRegistrationScreenState
     });
   }
 
-  String _currentVoicePrompt(
-    AppStrings strings,
-    AccessibilityProfile profile,
-  ) {
+  String _currentVoicePrompt(AppStrings strings, AccessibilityProfile profile) {
     if (!profile.isSimplifiedUi) return strings.registrationFullPrompt;
     return _step == 0
         ? strings.registrationPhoneStepPrompt
@@ -77,16 +77,20 @@ class _AdaptiveRegistrationScreenState
       setState(() => _errorText = strings.phoneValidationError);
       return;
     }
+    _goToStep(1);
+    if (profile.voiceAssistantEnabled) {
+      ref
+          .read(voiceSessionProvider.notifier)
+          .speak(strings.registrationCodeStepPrompt, context: context);
+    }
+  }
+
+  void _goToStep(int step) {
+    if (_scrollController.hasClients) _scrollController.jumpTo(0);
     setState(() {
       _errorText = null;
-      _step = 1;
+      _step = step;
     });
-    if (profile.voiceAssistantEnabled) {
-      ref.read(voiceSessionProvider.notifier).speak(
-            strings.registrationCodeStepPrompt,
-            context: context,
-          );
-    }
   }
 
   Future<void> _submitLogin(
@@ -109,10 +113,8 @@ class _AdaptiveRegistrationScreenState
     await ref.read(voiceSessionProvider.notifier).stopAll();
     await ref.read(accessibilityProfileProvider.notifier).completeOnboarding();
     if (!mounted) return;
-    await Navigator.of(context).pushNamedAndRemoveUntil(
-      AppRoutes.home,
-      (_) => false,
-    );
+    await Navigator.of(context)
+        .pushNamedAndRemoveUntil(AppRoutes.home, (_) => false);
   }
 
   @override
@@ -133,15 +135,13 @@ class _AdaptiveRegistrationScreenState
             ? IconButton(
                 icon: const Icon(Icons.arrow_back_rounded),
                 tooltip: strings.backButton,
-                onPressed: () => setState(() {
-                  _errorText = null;
-                  _step = 0;
-                }),
+                onPressed: () => _goToStep(0),
               )
             : null,
       ),
       body: SafeArea(
         child: SingleChildScrollView(
+          controller: _scrollController,
           padding: EdgeInsets.all(tokens.spacingUnit * 2),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -173,21 +173,23 @@ class _AdaptiveRegistrationScreenState
                 SizedBox(height: tokens.spacingUnit * 2),
               ],
 
-              Text(
-                _currentVoicePrompt(strings, profile),
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w800,
+              if (!isStepByStep || !externalLabels) ...[
+                Text(
+                  _currentVoicePrompt(strings, profile),
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                  softWrap: true,
                 ),
-                softWrap: true,
-              ),
-              SizedBox(height: tokens.spacingUnit * 2),
+                SizedBox(height: tokens.spacingUnit * 2),
+              ],
 
               AdaptiveCard(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     if (!isStepByStep || _step == 0) ...[
-                      _AdaptiveLabeledField(
+                      AdaptiveTextField(
                         controller: _phoneController,
                         label: strings.phoneFieldLabel,
                         hint: strings.phoneFieldHint,
@@ -206,10 +208,9 @@ class _AdaptiveRegistrationScreenState
                         },
                       ),
                     ],
-                    if (!isStepByStep)
-                      SizedBox(height: tokens.spacingUnit * 2),
+                    if (!isStepByStep) SizedBox(height: tokens.spacingUnit * 2),
                     if (!isStepByStep || _step == 1) ...[
-                      _AdaptiveLabeledField(
+                      AdaptiveTextField(
                         controller: _codeController,
                         label: strings.iinOrSmsFieldLabel,
                         hint: strings.iinOrSmsFieldHint,
@@ -248,110 +249,40 @@ class _AdaptiveRegistrationScreenState
 
               SizedBox(height: tokens.spacingUnit * 2),
 
-              // 1-click demo prefill button
-              AdaptiveActionButton(
-                label: strings.fillDemoDataButton,
-                icon: Icons.auto_fix_high_rounded,
-                variant: AdaptiveButtonVariant.outlined,
-                onPressed: _fillDemoData,
-              ),
-
-              SizedBox(height: tokens.spacingUnit * 1.5),
-
               if (isStepByStep && _step == 0)
                 AdaptiveActionButton(
+                  key: const ValueKey('registration_next'),
                   label: strings.nextButton,
                   icon: Icons.arrow_forward_rounded,
                   onPressed: () => _advanceFromPhoneStep(strings, profile),
                 )
               else
                 AdaptiveActionButton(
+                  key: const ValueKey('registration_submit'),
                   label: strings.enterBankButton,
                   icon: Icons.login_rounded,
                   onPressed: () => _submitLogin(strings, profile),
                 ),
+
+              SizedBox(height: tokens.spacingUnit * 1.5),
+              AdaptiveActionButton(
+                label: strings.fillDemoDataButton,
+                variant: AdaptiveButtonVariant.outlined,
+                onPressed: _fillDemoData,
+              ),
 
               if (isStepByStep && _step == 1) ...[
                 SizedBox(height: tokens.spacingUnit * 1.5),
                 AdaptiveActionButton(
                   label: strings.backButton,
                   variant: AdaptiveButtonVariant.secondary,
-                  onPressed: () => setState(() {
-                    _errorText = null;
-                    _step = 0;
-                  }),
+                  onPressed: () => _goToStep(0),
                 ),
               ],
             ],
           ),
         ),
       ),
-    );
-  }
-}
-
-class _AdaptiveLabeledField extends StatelessWidget {
-  const _AdaptiveLabeledField({
-    required this.controller,
-    required this.label,
-    required this.hint,
-    required this.externalLabel,
-    required this.keyboardType,
-    required this.prefixIcon,
-    this.inputFormatters,
-    this.onChanged,
-  });
-
-  final TextEditingController controller;
-  final String label;
-  final String hint;
-  final bool externalLabel;
-  final TextInputType keyboardType;
-  final IconData prefixIcon;
-  final List<TextInputFormatter>? inputFormatters;
-  final ValueChanged<String>? onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = AdaptiveTokens.of(context);
-    final theme = Theme.of(context);
-
-    final field = Semantics(
-      textField: true,
-      label: label,
-      child: TextField(
-        controller: controller,
-        keyboardType: keyboardType,
-        inputFormatters: inputFormatters,
-        style: theme.textTheme.titleMedium?.copyWith(
-          fontWeight: FontWeight.w600,
-        ),
-        onChanged: onChanged,
-        decoration: InputDecoration(
-          labelText: externalLabel ? null : label,
-          hintText: hint,
-          prefixIcon: ExcludeSemantics(
-            child: Icon(prefixIcon, size: tokens.iconSize),
-          ),
-        ),
-      ),
-    );
-
-    if (!externalLabel) return field;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(
-          label,
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w700,
-          ),
-          softWrap: true,
-        ),
-        SizedBox(height: tokens.spacingUnit),
-        field,
-      ],
     );
   }
 }

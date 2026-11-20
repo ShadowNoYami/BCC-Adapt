@@ -31,6 +31,7 @@ class CalibrationScreen extends ConsumerStatefulWidget {
 
 class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
   int _step = 0;
+  final _scrollController = ScrollController();
 
   // Step 1 state
   late _VisionPreset _selectedVision;
@@ -62,27 +63,28 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _voiceService.stopAll();
     super.dispose();
   }
 
   String _stepVoicePrompt(AppStrings strings) => switch (_step) {
-        0 => strings.calibrationVisionPrompt,
-        1 => strings.calibrationMotorPrompt,
-        _ => strings.calibrationCognitivePrompt,
-      };
+    0 => strings.calibrationVisionPrompt,
+    1 => strings.calibrationMotorPrompt,
+    _ => strings.calibrationCognitivePrompt,
+  };
 
   void _speakCurrentStepIfEnabled() {
     final profile = ref.read(currentAccessibilityProfileProvider);
     if (!profile.voiceAssistantEnabled) return;
     final strings = ref.read(appStringsProvider);
-    ref.read(voiceSessionProvider.notifier).speak(
-          _stepVoicePrompt(strings),
-          context: context,
-        );
+    ref
+        .read(voiceSessionProvider.notifier)
+        .speak(_stepVoicePrompt(strings), context: context);
   }
 
   void _goToStep(int nextStep) {
+    if (_scrollController.hasClients) _scrollController.jumpTo(0);
     setState(() {
       _step = nextStep.clamp(0, 2);
       if (_step == 1) {
@@ -135,7 +137,9 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
     final elapsedMs = DateTime.now().difference(_step2ShownAt).inMilliseconds;
     setState(() => _motorFeedback = _MotorFeedback.hit);
     if (_missedTaps == 0) {
-      await ref.read(accessibilityProfileProvider.notifier).applyMotorCalibration(
+      await ref
+          .read(accessibilityProfileProvider.notifier)
+          .applyMotorCalibration(
             MotorCalibrationResult(
               totalTargets: 1,
               missedTaps: 0,
@@ -149,7 +153,9 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
     _missedTaps += 1;
     setState(() => _motorFeedback = _MotorFeedback.miss);
     HapticFeedback.heavyImpact();
-    await ref.read(accessibilityProfileProvider.notifier).applyMotorCalibration(
+    await ref
+        .read(accessibilityProfileProvider.notifier)
+        .applyMotorCalibration(
           MotorCalibrationResult(
             totalTargets: 1,
             missedTaps: _missedTaps,
@@ -162,6 +168,7 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
   Future<void> _toggleVoiceAssistant(bool enabled) async {
     final profileNotifier = ref.read(accessibilityProfileProvider.notifier);
     await profileNotifier.setVoiceAssistantEnabled(enabled);
+    if (!mounted) return;
 
     if (!enabled) {
       setState(() => _micDeniedNotice = false);
@@ -176,15 +183,13 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
     setState(() => _micDeniedNotice = !granted);
 
     final strings = ref.read(appStringsProvider);
-    await ref.read(voiceSessionProvider.notifier).speak(
-          strings.voiceOptionTitle,
-          context: context,
-        );
+    await ref
+        .read(voiceSessionProvider.notifier)
+        .speak(strings.voiceOptionTitle, context: context);
   }
 
   Future<void> _finishCalibration() async {
     await ref.read(voiceSessionProvider.notifier).stopAll();
-    await ref.read(accessibilityProfileProvider.notifier).completeOnboarding();
     if (!mounted) return;
     await Navigator.of(context).pushNamed(AppRoutes.registration);
   }
@@ -214,18 +219,11 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
       ),
       body: SafeArea(
         child: SingleChildScrollView(
+          controller: _scrollController,
           padding: EdgeInsets.all(tokens.spacingUnit * 2),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Always visible on calibration so user can switch language or
-              // replay spoken prompts at any time.
-              VoiceGuideHeader(
-                promptText: _stepVoicePrompt(strings),
-                alwaysShow: true,
-              ),
-              SizedBox(height: tokens.spacingUnit * 2),
-
               // Step progress
               Row(
                 children: [
@@ -253,8 +251,10 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
               SizedBox(height: tokens.spacingUnit * 2.5),
 
               // Step body
-              if (_step == 0) _buildVisionStep(context, strings, tokens, profile),
-              if (_step == 1) _buildMotorStep(context, strings, tokens, profile),
+              if (_step == 0)
+                _buildVisionStep(context, strings, tokens, profile),
+              if (_step == 1)
+                _buildMotorStep(context, strings, tokens, profile),
               if (_step == 2)
                 _buildCognitiveAndVoiceStep(context, strings, tokens, profile),
 
@@ -262,6 +262,11 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
 
               // Step navigation actions
               _buildFooterButtons(strings, tokens),
+              SizedBox(height: tokens.spacingUnit * 2),
+              VoiceGuideHeader(
+                promptText: _stepVoicePrompt(strings),
+                alwaysShow: true,
+              ),
             ],
           ),
         ),
@@ -410,6 +415,7 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
 
         // Interactive target pad: tapping outside the button triggers miss.
         GestureDetector(
+          excludeFromSemantics: true,
           behavior: HitTestBehavior.opaque,
           onTap: _onMotorTargetMissed,
           child: Container(
@@ -422,7 +428,7 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
               borderRadius: BorderRadius.circular(tokens.cornerRadius),
               border: Border.all(
                 color: _motorFeedback == _MotorFeedback.miss
-                    ? scheme.error
+                    ? tokens.warning
                     : scheme.outline,
                 width: profile.isHighContrast ? tokens.borderWidth : 1.5,
               ),
@@ -526,7 +532,7 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
     final theme = Theme.of(context);
     final isSimplified =
         profile.cognitiveMode == CognitiveMode.simplifiedEssential ||
-            profile.cognitiveMode == CognitiveMode.guidedStepByStep;
+        profile.cognitiveMode == CognitiveMode.guidedStepByStep;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -536,12 +542,6 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
           style: theme.textTheme.headlineSmall?.copyWith(
             fontWeight: FontWeight.w800,
           ),
-          softWrap: true,
-        ),
-        SizedBox(height: tokens.spacingUnit),
-        Text(
-          strings.calibrationCognitivePrompt,
-          style: theme.textTheme.bodyLarge,
           softWrap: true,
         ),
         SizedBox(height: tokens.spacingUnit * 2),
@@ -578,53 +578,11 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
         SizedBox(height: tokens.spacingUnit * 2.5),
 
         // Card 2: Voice assistant toggle + microphone permission
-        AdaptiveCard(
-          selected: profile.voiceAssistantEnabled,
-          semanticLabel:
-              '${strings.voiceOptionTitle}. ${strings.voiceOptionDesc}',
-          onTap: () => _toggleVoiceAssistant(!profile.voiceAssistantEnabled),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              ExcludeSemantics(
-                child: Icon(
-                  Icons.record_voice_over_rounded,
-                  size: tokens.iconSize * 1.2,
-                  color: profile.voiceAssistantEnabled
-                      ? tokens.accentText
-                      : theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-              SizedBox(width: tokens.spacingUnit * 1.5),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      strings.voiceOptionTitle,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                      softWrap: true,
-                    ),
-                    SizedBox(height: tokens.spacingUnit * 0.5),
-                    Text(
-                      strings.voiceOptionDesc,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                      softWrap: true,
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(width: tokens.spacingUnit),
-              Switch(
-                value: profile.voiceAssistantEnabled,
-                onChanged: _toggleVoiceAssistant,
-              ),
-            ],
-          ),
+        VoiceAssistantToggle(
+          enabled: profile.voiceAssistantEnabled,
+          title: strings.voiceAssistantLabel,
+          description: strings.voiceOptionDesc,
+          onChanged: _toggleVoiceAssistant,
         ),
 
         if (_micDeniedNotice) ...[
@@ -655,7 +613,10 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         AdaptiveActionButton(
-          label: _step == 2 ? strings.finishCalibrationButton : strings.nextButton,
+          key: ValueKey(_step),
+          label: _step == 2
+              ? strings.finishCalibrationButton
+              : strings.nextButton,
           icon: _step == 2
               ? Icons.check_circle_outline_rounded
               : Icons.arrow_forward_rounded,
@@ -703,14 +664,13 @@ class _VisionPreviewCard extends ConsumerWidget {
     final borderWidth = selected ? 3.5 : (forceCrispOutline ? 2.0 : 1.0);
     final borderColor = selected
         ? (previewPalette.brightness == Brightness.dark
-            ? previewPalette.emphasis
-            : previewPalette.primary)
+              ? previewPalette.emphasis
+              : previewPalette.primary)
         : previewPalette.border;
 
     return Semantics(
       button: true,
       selected: selected,
-      label: '$title. $balanceLabel 50 000 ₸. $description',
       child: Material(
         color: previewPalette.surface,
         shape: RoundedRectangleBorder(
@@ -819,10 +779,7 @@ class _ContrastBgChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Semantics(
-      button: true,
       selected: selected,
-      label: label,
-      excludeSemantics: true,
       child: OutlinedButton.icon(
         onPressed: onTap,
         icon: ExcludeSemantics(

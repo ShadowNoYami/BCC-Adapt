@@ -16,6 +16,7 @@ import '../../../core/voice/domain/amount_in_words.dart';
 import '../../../core/voice/domain/voice_transfer_parser.dart';
 import '../../../shared/widgets/adaptive_action_button.dart';
 import '../../../shared/widgets/adaptive_card.dart';
+import '../../../shared/widgets/adaptive_text_field.dart';
 import '../../../shared/widgets/voice_guide_header.dart';
 import '../data/mock_bank_repository.dart';
 import '../domain/bank_models.dart';
@@ -45,6 +46,7 @@ class TransferScreen extends ConsumerStatefulWidget {
 class _TransferScreenState extends ConsumerState<TransferScreen> {
   final _phoneController = TextEditingController();
   final _amountController = TextEditingController();
+  final _draftKey = GlobalKey();
 
   QuickContact? _selectedContact;
   String? _formError;
@@ -53,10 +55,11 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
   // Anti-fraud 5-second cooling-off state
   Timer? _coolingTimer;
   int _coolingSecondsRemaining = 0;
-  String _lastCoolingKey = '';
+  ({String phone, double amount})? _lastCoolingDraft;
 
   // Receipt state after transfer execution
   _TransferReceipt? _receipt;
+  bool _awaitingAccessibleConfirmation = false;
   late final VoiceAccessibilityService _voiceService;
 
   @override
@@ -65,8 +68,9 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
     _voiceService = ref.read(voiceAccessibilityServiceProvider);
     _selectedContact = widget.initialContact;
     if (_selectedContact?.defaultAmountTenge != null) {
-      _amountController.text =
-          _selectedContact!.defaultAmountTenge!.round().toString();
+      _amountController.text = _selectedContact!.defaultAmountTenge!
+          .round()
+          .toString();
     }
   }
 
@@ -89,16 +93,21 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
 
   bool _isStrangerRecipient(MockBankRepository bankRepo) {
     if (_selectedContact != null) return false;
-    final phoneText = _phoneController.text.trim();
-    if (phoneText.isEmpty) return false;
-    return bankRepo.findContact(phoneText) == null;
+    final phone = _normalizedPhone;
+    return phone != null && bankRepo.findContact(phone) == null;
   }
+
+  String? get _normalizedPhone =>
+      VoiceTransferParser.normalizePhone(_phoneController.text);
+
+  (String?, String?, double) get _draft =>
+      (_selectedContact?.id, _normalizedPhone, _parsedAmount);
 
   bool _requiresAntiFraudCooling(
     AccessibilityProfile profile,
     MockBankRepository bankRepo,
   ) {
-    if (!_isStrangerRecipient(bankRepo)) return false;
+    if (_parsedAmount <= 0 || !_isStrangerRecipient(bankRepo)) return false;
     return profile.isSimplifiedUi || _parsedAmount >= 50000;
   }
 
@@ -110,15 +119,14 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
     if (!active) {
       _coolingTimer?.cancel();
       _coolingTimer = null;
-      _lastCoolingKey = '';
+      _lastCoolingDraft = null;
       _coolingSecondsRemaining = 0;
       return;
     }
 
-    final coolingKey =
-        '${_phoneController.text.trim()}|${_parsedAmount >= 50000}|${profile.cognitiveMode.name}';
-    if (_lastCoolingKey == coolingKey) return;
-    _lastCoolingKey = coolingKey;
+    final draft = (phone: _normalizedPhone!, amount: _parsedAmount);
+    if (_lastCoolingDraft == draft) return;
+    _lastCoolingDraft = draft;
 
     _coolingTimer?.cancel();
     _coolingSecondsRemaining = 5;
@@ -141,19 +149,23 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
       _selectedContact = contact;
       _phoneController.clear();
       _formError = null;
-      if (_amountController.text.trim().isEmpty &&
+      _voiceBannerMessage = null;
+      if (contact.category == QuickContactCategory.utilities &&
+          _amountController.text.trim().isEmpty &&
           contact.defaultAmountTenge != null) {
         _amountController.text = contact.defaultAmountTenge!.round().toString();
       }
       _reevaluateAntiFraud();
     });
+    _scrollToDraft();
   }
 
   void _addAmount(int delta) {
     final next = _parsedAmount + delta;
     setState(() {
-      _amountController.text = next.round().toString();
+      _amountController.text = next.toStringAsFixed(next % 1 == 0 ? 0 : 2);
       _formError = null;
+      _voiceBannerMessage = null;
       _reevaluateAntiFraud();
     });
   }
@@ -166,6 +178,7 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
     String recipientDisplay = '';
     setState(() {
       _formError = null;
+      _voiceBannerMessage = null;
       if (intent.amount != null && intent.amount! > 0) {
         _amountController.text = intent.amount! % 1 == 0
             ? intent.amount!.round().toString()
@@ -195,8 +208,12 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
       _reevaluateAntiFraud();
     });
 
+    _scrollToDraft();
+
     if (intent.amountInWords != null && recipientDisplay.isNotEmpty) {
-      ref.read(voiceSessionProvider.notifier).speak(
+      ref
+          .read(voiceSessionProvider.notifier)
+          .speak(
             strings.voiceDraftReadyTemplate(
               intent.amountInWords!,
               recipientDisplay,
@@ -204,6 +221,19 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
             context: context,
           );
     }
+  }
+
+  void _scrollToDraft() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final draftContext = _draftKey.currentContext;
+      if (draftContext != null && draftContext.mounted) {
+        Scrollable.ensureVisible(
+          draftContext,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOutCubic,
+        );
+      }
+    });
   }
 
   Future<void> _onMicButtonPressed() async {
@@ -217,6 +247,7 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
   }
 
   Future<void> _executeTransfer() async {
+    if (_receipt != null || _coolingSecondsRemaining > 0) return;
     final profile = ref.read(currentAccessibilityProfileProvider);
     final strings = ref.read(appStringsProvider);
     final bankState = ref.read(mockBankRepositoryProvider);
@@ -232,14 +263,16 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
       return;
     }
 
-    final QuickContact? contact = _selectedContact ??
-        bankNotifier.findContact(_phoneController.text.trim());
-    final rawPhone = _phoneController.text.trim();
-    if (contact == null && rawPhone.isEmpty) {
+    final phone = _normalizedPhone;
+    final contact = _selectedContact ?? bankNotifier.findContact(phone);
+    if (contact == null && phone == null) {
       setState(() => _formError = strings.invalidRecipientError);
       return;
     }
 
+    final rawPhone = phone == null
+        ? ''
+        : VoiceTransferParser.formatPhone(phone);
     final titleRu = contact?.titleRu ?? rawPhone;
     final titleKk = contact?.titleKk ?? rawPhone;
     final ok = bankNotifier.executeTransfer(
@@ -255,9 +288,12 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
       return;
     }
 
-    final updatedBalance =
-        ref.read(mockBankRepositoryProvider).primaryAccount.balanceTenge;
-    final recipientDisplay = contact?.localizedTitle(profile.localeCode) ?? rawPhone;
+    final updatedBalance = ref
+        .read(mockBankRepositoryProvider)
+        .primaryAccount
+        .balanceTenge;
+    final recipientDisplay =
+        contact?.localizedTitle(profile.localeCode) ?? rawPhone;
 
     setState(() {
       _formError = null;
@@ -268,10 +304,62 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
       );
     });
 
-    await ref.read(voiceSessionProvider.notifier).speak(
-          strings.transferSuccessTitle,
-          context: context,
-        );
+    await ref
+        .read(voiceSessionProvider.notifier)
+        .speak(strings.transferSuccessTitle, context: context);
+  }
+
+  Future<void> _confirmWithAssistiveInput() async {
+    if (_awaitingAccessibleConfirmation || _coolingSecondsRemaining > 0) return;
+    final draft = _draft;
+    final profile = ref.read(currentAccessibilityProfileProvider);
+    final strings = ref.read(appStringsProvider);
+    if (_parsedAmount <= 0 ||
+        (_selectedContact == null && _normalizedPhone == null)) {
+      await _executeTransfer();
+      return;
+    }
+
+    final ready = Future<void>.delayed(profile.holdToConfirmDuration);
+    final recipient =
+        _selectedContact?.localizedTitle(profile.localeCode) ??
+        VoiceTransferParser.formatPhone(_normalizedPhone!);
+    _awaitingAccessibleConfirmation = true;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        scrollable: true,
+        title: Text(strings.sendTransferButton),
+        content: Text(
+          strings.speakTransferCheckTemplate(
+            recipient: recipient,
+            amountInWords: AmountInWords.format(
+              draft.$3,
+              localeCode: profile.localeCode,
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(strings.backButton),
+          ),
+          FutureBuilder<void>(
+            future: ready,
+            builder: (context, snapshot) => TextButton(
+              onPressed: snapshot.connectionState == ConnectionState.done
+                  ? () => Navigator.of(dialogContext).pop(true)
+                  : null,
+              child: Text(strings.sendTransferButton),
+            ),
+          ),
+        ],
+      ),
+    );
+    _awaitingAccessibleConfirmation = false;
+    if (mounted && confirmed == true && draft == _draft) {
+      await _executeTransfer();
+    }
   }
 
   @override
@@ -300,10 +388,8 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
         strings: strings,
         onDone: () {
           ref.read(voiceSessionProvider.notifier).resetSession();
-          Navigator.of(context).pushNamedAndRemoveUntil(
-            AppRoutes.home,
-            (_) => false,
-          );
+          Navigator.of(context)
+              .pushNamedAndRemoveUntil(AppRoutes.home, (_) => false);
         },
       );
     }
@@ -314,107 +400,125 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
         ? AmountInWords.format(amount, localeCode: profile.localeCode)
         : null;
     final externalLabels = profile.textScaleFactor >= 1.5;
+    final selectedName = _selectedContact?.localizedTitle(profile.localeCode);
+    final phone = _normalizedPhone;
+    final recipientName =
+        selectedName ??
+        bankNotifier.findContact(phone)?.localizedTitle(profile.localeCode) ??
+        (phone == null ? null : VoiceTransferParser.formatPhone(phone));
 
+    final micPreparing =
+        voiceSession.status == VoiceListeningStatus.initializing;
     final micUnavailable =
         voiceSession.status == VoiceListeningStatus.permissionDenied ||
-            voiceSession.status == VoiceListeningStatus.unavailable ||
-            voiceSession.status == VoiceListeningStatus.error;
+        voiceSession.status == VoiceListeningStatus.unavailable ||
+        voiceSession.status == VoiceListeningStatus.error;
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(strings.transferScreenTitle, softWrap: true),
-      ),
+      appBar: AppBar(title: Text(strings.transferScreenTitle, softWrap: true)),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: EdgeInsets.all(tokens.spacingUnit * 2),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              VoiceGuideHeader(
-                promptText: strings.voiceExamplePrompt,
+              Text(
+                strings.trustedContactsLabel,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-              if (profile.voiceAssistantEnabled)
-                SizedBox(height: tokens.spacingUnit * 2),
+              SizedBox(height: tokens.spacingUnit),
 
-              // 1. Safe Voice Intent Filler (Push-to-Talk)
               AdaptiveCard(
+                padding: EdgeInsets.zero,
                 backgroundColor: voiceSession.isListening
                     ? scheme.primaryContainer
                     : null,
                 borderColor: voiceSession.isListening ? scheme.primary : null,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                child: ExpansionTile(
+                  title: Text(strings.voiceTransferOptions),
+                  leading: Icon(
+                    Icons.mic_none_rounded,
+                    color: tokens.accentText,
+                  ),
+                  minTileHeight: tokens.minTouchTarget,
+                  tilePadding: EdgeInsets.symmetric(
+                    horizontal: tokens.spacingUnit,
+                  ),
+                  childrenPadding: EdgeInsets.all(tokens.spacingUnit * 1.5),
                   children: [
-                    AdaptiveActionButton(
-                      label: voiceSession.isListening
-                          ? strings.voiceListeningNow
-                          : strings.voiceFillTransferButton,
-                      subtitle: voiceSession.isListening
-                          ? null
-                          : strings.voiceExamplePrompt,
-                      icon: voiceSession.isListening
-                          ? Icons.stop_rounded
-                          : Icons.mic_rounded,
-                      onPressed: _onMicButtonPressed,
-                    ),
-                    if (micUnavailable) ...[
-                      SizedBox(height: tokens.spacingUnit * 1.25),
-                      Text(
-                        strings.micUnavailableDemoHint,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: tokens.warning,
-                          fontWeight: FontWeight.w600,
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          strings.voiceDraftOnly,
+                          style: theme.textTheme.bodyMedium,
                         ),
-                        softWrap: true,
-                      ),
-                    ],
-                    if (_voiceBannerMessage != null) ...[
-                      SizedBox(height: tokens.spacingUnit * 1.25),
-                      Semantics(
-                        liveRegion: true,
-                        child: Text(
-                          _voiceBannerMessage!,
-                          style: theme.textTheme.bodyLarge?.copyWith(
-                            color: tokens.accentText,
-                            fontWeight: FontWeight.w700,
+                        if (profile.voiceAssistantEnabled) ...[
+                          SizedBox(height: tokens.spacingUnit),
+                          VoiceGuideHeader(
+                            promptText: strings.voiceExamplePrompt,
+                          ),
+                        ],
+                        SizedBox(height: tokens.spacingUnit),
+                        AdaptiveActionButton(
+                          label: voiceSession.isListening
+                              ? strings.voiceListeningNow
+                              : micPreparing
+                              ? strings.voicePreparing
+                              : strings.voiceFillTransferButton,
+                          icon: voiceSession.isListening
+                              ? Icons.stop_rounded
+                              : Icons.mic_rounded,
+                          onPressed: micPreparing ? null : _onMicButtonPressed,
+                        ),
+                        if (micUnavailable) ...[
+                          SizedBox(height: tokens.spacingUnit * 1.25),
+                          Text(
+                            strings.micUnavailableDemoHint,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: tokens.warning,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            softWrap: true,
+                          ),
+                        ],
+                        SizedBox(height: tokens.spacingUnit * 1.5),
+                        Text(
+                          strings.voiceDemoSamplesLabel,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w600,
                           ),
                           softWrap: true,
                         ),
-                      ),
-                    ],
-                    SizedBox(height: tokens.spacingUnit * 1.5),
-                    Text(
-                      strings.voiceDemoSamplesLabel,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      softWrap: true,
-                    ),
-                    SizedBox(height: tokens.spacingUnit),
-                    Wrap(
-                      spacing: tokens.spacingUnit,
-                      runSpacing: tokens.spacingUnit,
-                      children: [
-                        _DemoVoiceChip(
-                          label: strings.voiceDemoSampleArman,
-                          onTap: () => ref
-                              .read(voiceSessionProvider.notifier)
-                              .simulateVoiceInput(
-                                profile.localeCode == 'kk'
-                                    ? 'Арманға 5000 теңге аудар'
-                                    : 'Перевести 5000 тенге Арману',
-                              ),
-                        ),
-                        _DemoVoiceChip(
-                          label: strings.voiceDemoSampleStranger,
-                          onTap: () => ref
-                              .read(voiceSessionProvider.notifier)
-                              .simulateVoiceInput(
-                                profile.localeCode == 'kk'
-                                    ? '8 777 999 88 77 нөміріне 60000 теңге жібер'
-                                    : 'Перевести 60000 тенге на 8 777 999 88 77',
-                              ),
+                        SizedBox(height: tokens.spacingUnit),
+                        Wrap(
+                          spacing: tokens.spacingUnit,
+                          runSpacing: tokens.spacingUnit,
+                          children: [
+                            _DemoVoiceChip(
+                              label: strings.voiceDemoSampleArman,
+                              onTap: () => ref
+                                  .read(voiceSessionProvider.notifier)
+                                  .simulateVoiceInput(
+                                    profile.localeCode == 'kk'
+                                        ? 'Арманға 5000 теңге аудар'
+                                        : 'Перевести 5000 тенге Арману',
+                                  ),
+                            ),
+                            _DemoVoiceChip(
+                              label: strings.voiceDemoSampleStranger,
+                              onTap: () => ref
+                                  .read(voiceSessionProvider.notifier)
+                                  .simulateVoiceInput(
+                                    profile.localeCode == 'kk'
+                                        ? '8 777 999 88 77 нөміріне 60000 теңге жібер'
+                                        : 'Перевести 60000 тенге на 8 777 999 88 77',
+                                  ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -424,14 +528,6 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
               SizedBox(height: tokens.spacingUnit * 2),
 
               // 2. Trusted Contacts + Phone Input
-              Text(
-                strings.trustedContactsLabel,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-                softWrap: true,
-              ),
-              SizedBox(height: tokens.spacingUnit),
               ...bankState.quickContacts.map((contact) {
                 final selected = _selectedContact?.id == contact.id;
                 final contactTitle = contact.localizedTitle(profile.localeCode);
@@ -448,9 +544,9 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                             selected
                                 ? Icons.check_circle_rounded
                                 : (contact.category ==
-                                        QuickContactCategory.utilities
-                                    ? Icons.receipt_long_rounded
-                                    : Icons.person_rounded),
+                                          QuickContactCategory.utilities
+                                      ? Icons.receipt_long_rounded
+                                      : Icons.person_rounded),
                             color: selected
                                 ? tokens.accentText
                                 : scheme.onSurfaceVariant,
@@ -487,110 +583,99 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
               SizedBox(height: tokens.spacingUnit * 1.5),
 
               AdaptiveCard(
+                key: _draftKey,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (externalLabels) ...[
-                      Text(
-                        strings.otherPhoneRecipientLabel,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
+                    if (_voiceBannerMessage != null) ...[
+                      Semantics(
+                        liveRegion: true,
+                        child: Text(
+                          _voiceBannerMessage!,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: tokens.accentText,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
-                        softWrap: true,
+                      ),
+                      SizedBox(height: tokens.spacingUnit),
+                    ] else if (selectedName != null) ...[
+                      Semantics(
+                        liveRegion: true,
+                        child: Text(
+                          '${strings.recipientFieldLabel}: $selectedName',
+                          style: theme.textTheme.bodyLarge?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: tokens.accentText,
+                          ),
+                        ),
                       ),
                       SizedBox(height: tokens.spacingUnit),
                     ],
-                    TextField(
+                    AdaptiveTextField(
                       controller: _phoneController,
+                      label: selectedName == null
+                          ? strings.otherPhoneRecipientLabel
+                          : strings.differentPhoneRecipientLabel,
+                      hint: selectedName == null ? strings.phoneFieldHint : '',
+                      externalLabel: externalLabels,
                       keyboardType: TextInputType.phone,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                      prefixIcon: Icons.phone_rounded,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(
+                          RegExp(r'[0-9+ ()\u00A0\u202F-]'),
+                        ),
+                      ],
                       onChanged: (value) {
                         setState(() {
                           if (value.trim().isNotEmpty) {
                             _selectedContact = null;
                           }
                           _formError = null;
+                          _voiceBannerMessage = null;
                           _reevaluateAntiFraud();
                         });
                       },
-                      decoration: InputDecoration(
-                        labelText: externalLabels
-                            ? null
-                            : strings.otherPhoneRecipientLabel,
-                        hintText: strings.phoneFieldHint,
-                        prefixIcon: Icon(
-                          Icons.phone_rounded,
-                          size: tokens.iconSize,
-                        ),
-                      ),
                     ),
                     SizedBox(height: tokens.spacingUnit * 2),
 
                     // Amount Input
-                    if (externalLabels) ...[
-                      Text(
-                        strings.amountFieldLabel,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                        softWrap: true,
-                      ),
-                      SizedBox(height: tokens.spacingUnit),
-                    ],
-                    TextField(
+                    AdaptiveTextField(
                       controller: _amountController,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [
-                        FilteringTextInputFormatter.digitsOnly,
-                        LengthLimitingTextInputFormatter(9),
-                      ],
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w800,
+                      label: strings.amountFieldLabel,
+                      hint: '',
+                      externalLabel: externalLabels,
+                      suffixText: '₸',
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
                       ),
+                      inputFormatters: [
+                        TextInputFormatter.withFunction((oldValue, newValue) {
+                          final ungrouped = newValue.text.replaceAll(
+                            RegExp(r'[\s\u00A0\u202F]'),
+                            '',
+                          );
+                          return RegExp(r'^\d{0,9}(?:[.,]\d{0,2})?$')
+                                  .hasMatch(ungrouped)
+                              ? newValue
+                              : oldValue;
+                        }),
+                      ],
                       onChanged: (_) => setState(() {
                         _formError = null;
+                        _voiceBannerMessage = null;
                         _reevaluateAntiFraud();
                       }),
-                      decoration: InputDecoration(
-                        labelText:
-                            externalLabels ? null : strings.amountFieldLabel,
-                        hintText: '5000',
-                        suffixText: '₸',
-                      ),
                     ),
-                    SizedBox(height: tokens.spacingUnit * 1.5),
-
-                    // Quick amount buttons (+1000, +5000, +10000)
-                    Wrap(
-                      spacing: tokens.spacingUnit,
-                      runSpacing: tokens.spacingUnit,
-                      children: [1000, 5000, 10000].map((delta) {
-                        return OutlinedButton(
-                          onPressed: () => _addAmount(delta),
-                          style: OutlinedButton.styleFrom(
-                            minimumSize: Size(
-                              math.max(48, tokens.minTouchTarget),
-                              math.max(48, tokens.minTouchTarget),
-                            ),
-                          ),
-                          child: Text(
-                            '+${MoneyFormatter.format(delta, localeCode: profile.localeCode)}',
-                            softWrap: true,
-                          ),
-                        );
-                      }).toList(),
-                    ),
-
                     // 3. Amount in words readout (anti-extra-zero guard)
                     if (amountWords != null) ...[
-                      SizedBox(height: tokens.spacingUnit * 2),
+                      SizedBox(height: tokens.spacingUnit * 1.25),
                       Semantics(
                         liveRegion: true,
                         label: '${strings.amountInWordsPrefix} $amountWords',
+                        excludeSemantics: true,
                         child: Container(
-                          padding: EdgeInsets.all(tokens.spacingUnit * 1.5),
+                          padding: EdgeInsets.all(tokens.spacingUnit),
                           decoration: BoxDecoration(
                             color: scheme.surfaceContainerHighest,
                             borderRadius: BorderRadius.circular(12),
@@ -617,7 +702,7 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                               const SizedBox(height: 4),
                               Text(
                                 amountWords,
-                                style: theme.textTheme.titleLarge?.copyWith(
+                                style: theme.textTheme.titleMedium?.copyWith(
                                   color: tokens.accentText,
                                   fontWeight: FontWeight.w800,
                                 ),
@@ -628,6 +713,32 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                         ),
                       ),
                     ],
+                    SizedBox(height: tokens.spacingUnit * 1.5),
+
+                    // Quick amount buttons (+1000, +5000, +10000)
+                    Wrap(
+                      spacing: tokens.spacingUnit,
+                      runSpacing: tokens.spacingUnit,
+                      children: [1000, 5000, 10000].map((delta) {
+                        return OutlinedButton(
+                          onPressed: () => _addAmount(delta),
+                          style: OutlinedButton.styleFrom(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: tokens.spacingUnit,
+                              vertical: tokens.spacingUnit * 0.5,
+                            ),
+                            minimumSize: Size(
+                              math.max(48, tokens.minTouchTarget),
+                              math.max(48, tokens.minTouchTarget),
+                            ),
+                          ),
+                          child: Text(
+                            '+${MoneyFormatter.format(delta, localeCode: profile.localeCode)}',
+                            softWrap: true,
+                          ),
+                        );
+                      }).toList(),
+                    ),
                   ],
                 ),
               ),
@@ -640,47 +751,38 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                   container: true,
                   label:
                       '${strings.antiFraudStrangerTitle}. ${strings.antiFraudStrangerBody}',
+                  excludeSemantics: true,
                   child: AdaptiveCard(
-                    backgroundColor: scheme.errorContainer,
-                    borderColor: scheme.error,
+                    backgroundColor: scheme.surfaceContainerHighest,
+                    borderColor: tokens.warning,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            ExcludeSemantics(
-                              child: Icon(
-                                Icons.warning_amber_rounded,
-                                color: scheme.error,
-                                size: tokens.iconSize * 1.3,
-                              ),
-                            ),
-                            SizedBox(width: tokens.spacingUnit * 1.25),
-                            Expanded(
-                              child: Text(
-                                strings.antiFraudStrangerTitle,
-                                style: theme.textTheme.titleLarge?.copyWith(
-                                  color: scheme.onErrorContainer,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                                softWrap: true,
-                              ),
-                            ),
-                          ],
+                        Text(
+                          strings.antiFraudStrangerTitle,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            color: scheme.onSurface,
+                            fontWeight: FontWeight.w800,
+                          ),
+                          softWrap: true,
                         ),
                         SizedBox(height: tokens.spacingUnit),
                         Text(
                           strings.antiFraudStrangerBody,
-                          style: theme.textTheme.bodyLarge?.copyWith(
-                            color: scheme.onErrorContainer,
-                            fontWeight: FontWeight.w600,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: scheme.onSurface,
                           ),
                           softWrap: true,
                         ),
                       ],
                     ),
                   ),
+                ),
+                SizedBox(height: tokens.spacingUnit),
+                AdaptiveActionButton(
+                  label: strings.cancelTransferButton,
+                  variant: AdaptiveButtonVariant.outlined,
+                  onPressed: () => Navigator.of(context).maybePop(),
                 ),
               ],
 
@@ -701,23 +803,51 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
 
               SizedBox(height: tokens.spacingUnit * 2.5),
 
+              if (recipientName != null && amount > 0) ...[
+                AdaptiveCard(
+                  padding: EdgeInsets.all(tokens.spacingUnit * 1.5),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${strings.recipientFieldLabel}: $recipientName',
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      SizedBox(height: tokens.spacingUnit * 0.5),
+                      Text(
+                        '${strings.transferReviewAmountLabel}: '
+                        '${MoneyFormatter.format(amount, localeCode: profile.localeCode, showTiyn: amount % 1 != 0)}',
+                        style: theme.textTheme.bodyLarge,
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: tokens.spacingUnit),
+              ],
+
               // 4b. Confirmation button: Cooling-off block OR Hold-to-confirm OR Standard
               if (_coolingSecondsRemaining > 0)
                 Semantics(
                   liveRegion: true,
                   child: AdaptiveActionButton(
-                    label:
-                        strings.antiFraudWaitTemplate(_coolingSecondsRemaining),
+                    label: strings.antiFraudWaitTemplate(
+                      _coolingSecondsRemaining,
+                    ),
                     icon: Icons.hourglass_top_rounded,
                     onPressed: null,
                   ),
                 )
               else if (profile.requiresHoldToConfirm)
                 _HoldToConfirmButton(
-                  idleLabel: strings.holdToConfirmProgressLabel,
+                  key: ValueKey(_draft),
+                  idleLabel: strings.sendTransferButton,
+                  instruction: strings.holdToConfirmHint,
                   activeLabel: strings.holdToConfirmActiveLabel,
                   duration: profile.holdToConfirmDuration,
                   onConfirmed: _executeTransfer,
+                  onAccessibleConfirm: _confirmWithAssistiveInput,
                 )
               else
                 AdaptiveActionButton(
@@ -734,10 +864,7 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
 }
 
 class _DemoVoiceChip extends StatelessWidget {
-  const _DemoVoiceChip({
-    required this.label,
-    required this.onTap,
-  });
+  const _DemoVoiceChip({required this.label, required this.onTap});
 
   final String label;
   final VoidCallback onTap;
@@ -764,16 +891,21 @@ class _DemoVoiceChip extends StatelessWidget {
 /// tactile haptics for [MotorAssistanceLevel.tremorProtection].
 class _HoldToConfirmButton extends StatefulWidget {
   const _HoldToConfirmButton({
+    super.key,
     required this.idleLabel,
+    required this.instruction,
     required this.activeLabel,
     required this.duration,
     required this.onConfirmed,
+    required this.onAccessibleConfirm,
   });
 
   final String idleLabel;
+  final String instruction;
   final String activeLabel;
   final Duration duration;
   final VoidCallback onConfirmed;
+  final VoidCallback onAccessibleConfirm;
 
   @override
   State<_HoldToConfirmButton> createState() => _HoldToConfirmButtonState();
@@ -782,9 +914,12 @@ class _HoldToConfirmButton extends StatefulWidget {
 class _HoldToConfirmButtonState extends State<_HoldToConfirmButton>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
+  Timer? _holdTimer;
+  int? _pointer;
   Offset? _downPosition;
+  Duration? _holdStartedAt;
   bool _holding = false;
-  bool _completed = false;
+  bool _showFocus = false;
 
   @override
   void initState() {
@@ -792,36 +927,53 @@ class _HoldToConfirmButtonState extends State<_HoldToConfirmButton>
     _controller = AnimationController(
       vsync: this,
       duration: widget.duration,
-    )..addStatusListener((status) {
-        if (status == AnimationStatus.completed && !_completed) {
-          _completed = true;
-          _holding = false;
-          HapticFeedback.heavyImpact();
-          widget.onConfirmed();
-        }
-      });
+      animationBehavior: AnimationBehavior.preserve,
+    );
   }
 
   @override
   void dispose() {
+    _pointer = null;
+    _holdTimer?.cancel();
     _controller.dispose();
     super.dispose();
   }
 
-  void _startHold(Offset position) {
-    _downPosition = position;
-    _completed = false;
+  void _startHold(PointerDownEvent event) {
+    if (_pointer != null || event.buttons != 1) return;
+    _pointer = event.pointer;
+    _downPosition = event.position;
+    _holdStartedAt = event.timeStamp;
     setState(() => _holding = true);
     HapticFeedback.mediumImpact();
     _controller.forward(from: 0);
+    _holdTimer = Timer(widget.duration, _finishHold);
+  }
+
+  void _finishHold() {
+    if (!_holding) return;
+    setState(() => _holding = false);
+    HapticFeedback.heavyImpact();
+    widget.onConfirmed();
+  }
+
+  void _releaseHold(PointerUpEvent event) {
+    if (_pointer != event.pointer) return;
+    // A browser can defer the timer while still delivering the release event.
+    if (event.timeStamp - _holdStartedAt! >= widget.duration) {
+      _finishHold();
+    }
+    _cancelHold();
   }
 
   void _cancelHold() {
-    if (!mounted || _completed) return;
-    if (!_holding && _controller.value == 0) return;
-    setState(() => _holding = false);
-    _controller.reset();
+    if (!mounted) return;
+    _pointer = null;
     _downPosition = null;
+    _holdStartedAt = null;
+    _holdTimer?.cancel();
+    if (_holding) setState(() => _holding = false);
+    _controller.reset();
   }
 
   @override
@@ -833,87 +985,98 @@ class _HoldToConfirmButtonState extends State<_HoldToConfirmButton>
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
-      child: AnimatedBuilder(
-        animation: _controller,
-        builder: (context, _) {
-          final pct = (_controller.value * 100).round();
-          return Semantics(
-            button: true,
-            liveRegion: _holding,
-            label: _holding ? widget.activeLabel : widget.idleLabel,
-            value: _holding ? '$pct%' : null,
-            onLongPress: widget.onConfirmed,
-            child: Listener(
-              onPointerDown: (e) => _startHold(e.position),
-              onPointerMove: (e) {
-                if (_downPosition != null &&
-                    (e.position - _downPosition!).distance > 28) {
-                  _cancelHold();
-                }
-              },
-              onPointerUp: (_) => _cancelHold(),
-              onPointerCancel: (_) => _cancelHold(),
-              child: Container(
-                constraints: const BoxConstraints(minHeight: 72),
-                decoration: BoxDecoration(
-                  color: scheme.primaryContainer,
-                  borderRadius: radius,
-                  border: Border.all(
-                    color: scheme.outline,
-                    width: tokens.borderWidth.clamp(2.0, 4.0),
-                  ),
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Positioned.fill(
-                      child: FractionallySizedBox(
-                        alignment: Alignment.centerLeft,
-                        widthFactor: _controller.value,
-                        child: Container(color: scheme.primary),
-                      ),
+      child: FocusableActionDetector(
+        onShowFocusHighlight: (value) => setState(() => _showFocus = value),
+        actions: {
+          ActivateIntent: CallbackAction<ActivateIntent>(
+            onInvoke: (_) {
+              widget.onAccessibleConfirm();
+              return null;
+            },
+          ),
+        },
+        child: AnimatedBuilder(
+          animation: _controller,
+          builder: (context, _) {
+            return Semantics(
+              button: true,
+              label: '${widget.idleLabel}. ${widget.instruction}',
+              value: _holding ? widget.activeLabel : null,
+              onTap: widget.onAccessibleConfirm,
+              excludeSemantics: true,
+              child: Listener(
+                behavior: HitTestBehavior.opaque,
+                onPointerDown: _startHold,
+                onPointerMove: (e) {
+                  if (_pointer == e.pointer &&
+                      _downPosition != null &&
+                      (e.position - _downPosition!).distance > 28) {
+                    _cancelHold();
+                  }
+                },
+                onPointerUp: _releaseHold,
+                onPointerCancel: (e) {
+                  if (_pointer == e.pointer) _cancelHold();
+                },
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 72),
+                  decoration: BoxDecoration(
+                    color: scheme.primaryContainer,
+                    borderRadius: radius,
+                    border: Border.all(
+                      color: _showFocus ? scheme.primary : scheme.outline,
+                      width: tokens.borderWidth.clamp(2.0, 4.0),
                     ),
-                    Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: tokens.spacingUnit * 2.5,
-                        vertical: tokens.spacingUnit * 2,
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        child: LinearProgressIndicator(
+                          value: _controller.value,
+                          minHeight: 8,
+                          color: scheme.primary,
+                          backgroundColor: scheme.primary.withValues(alpha: 0.18),
+                        ),
                       ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          ExcludeSemantics(
-                            child: Icon(
-                              Icons.fingerprint_rounded,
-                              size: tokens.iconSize,
-                              color: _controller.value > 0.5
-                                  ? scheme.onPrimary
-                                  : scheme.onPrimaryContainer,
-                            ),
-                          ),
-                          SizedBox(width: tokens.spacingUnit * 1.25),
-                          Flexible(
-                            child: Text(
-                              _holding ? widget.activeLabel : widget.idleLabel,
+                      Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: tokens.spacingUnit * 1.5,
+                          vertical: tokens.spacingUnit * 1.5 + 4,
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              widget.idleLabel,
                               style: theme.textTheme.labelLarge?.copyWith(
                                 fontWeight: FontWeight.w800,
-                                color: _controller.value > 0.5
-                                    ? scheme.onPrimary
-                                    : scheme.onPrimaryContainer,
+                                color: scheme.onPrimaryContainer,
                               ),
-                              softWrap: true,
                               textAlign: TextAlign.center,
                             ),
-                          ),
-                        ],
+                            SizedBox(height: tokens.spacingUnit * 0.5),
+                            Text(
+                              widget.instruction,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: scheme.onPrimaryContainer,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }

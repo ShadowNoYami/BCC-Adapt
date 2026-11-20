@@ -95,25 +95,25 @@ class _AdaptiveActionButtonState extends ConsumerState<AdaptiveActionButton> {
 
     final EdgeInsetsGeometry innerPadding = switch (profile.motorLevel) {
       MotorAssistanceLevel.standard => const EdgeInsets.symmetric(
-          horizontal: 20,
-          vertical: 14,
-        ),
+        horizontal: 20,
+        vertical: 14,
+      ),
       MotorAssistanceLevel.enlargedTargets => const EdgeInsets.symmetric(
-          horizontal: 24,
-          vertical: 18,
-        ),
+        horizontal: 24,
+        vertical: 18,
+      ),
       MotorAssistanceLevel.tremorProtection => const EdgeInsets.symmetric(
-          horizontal: 26,
-          vertical: 20,
-        ),
+        horizontal: 26,
+        vertical: 20,
+      ),
     };
 
     // 8 dp on all sides guarantees >= 16 dp between any two adjacent buttons.
     final outerMargin =
         widget.applyTremorSpacing &&
-                profile.motorLevel == MotorAssistanceLevel.tremorProtection
-            ? const EdgeInsets.all(8)
-            : EdgeInsets.zero;
+            profile.motorLevel == MotorAssistanceLevel.tremorProtection
+        ? const EdgeInsets.all(8)
+        : EdgeInsets.zero;
 
     final Color bg;
     final Color fg;
@@ -157,10 +157,7 @@ class _AdaptiveActionButtonState extends ConsumerState<AdaptiveActionButton> {
         return fg;
       }),
       minimumSize: WidgetStateProperty.all(
-        Size(
-          widget.expandWidth ? double.infinity : motorMinSize,
-          minHeight,
-        ),
+        Size(widget.expandWidth ? double.infinity : motorMinSize, minHeight),
       ),
       padding: WidgetStateProperty.all(innerPadding),
       shape: WidgetStateProperty.all(
@@ -170,7 +167,8 @@ class _AdaptiveActionButtonState extends ConsumerState<AdaptiveActionButton> {
         ),
       ),
       elevation: WidgetStateProperty.all(
-        profile.isHighContrast || widget.variant != AdaptiveButtonVariant.primary
+        profile.isHighContrast ||
+                widget.variant != AdaptiveButtonVariant.primary
             ? 0
             : 1,
       ),
@@ -234,14 +232,13 @@ class _AdaptiveActionButtonState extends ConsumerState<AdaptiveActionButton> {
 
     return Padding(
       padding: outerMargin,
-      child: Semantics(
-        button: true,
-        enabled: !isDisabled,
-        label: widget.semanticLabel ?? widget.label,
-        hint: widget.semanticHint,
-        child: ElevatedButton(
-          onPressed: isDisabled ? null : () => _handleTap(profile, tokens),
-          style: style,
+      child: ElevatedButton(
+        onPressed: isDisabled ? null : () => _handleTap(profile, tokens),
+        style: style,
+        child: Semantics(
+          label: widget.semanticLabel,
+          hint: widget.semanticHint,
+          excludeSemantics: widget.semanticLabel != null,
           child: content,
         ),
       ),

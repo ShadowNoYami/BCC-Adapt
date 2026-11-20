@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -52,13 +53,16 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
   }
 
   Future<void> _onZeroTouchTimeout() async {
-    if (!mounted || _hasInteracted) return;
+    // Browsers require a user gesture before starting speech.
+    if (!mounted || _hasInteracted || kIsWeb) return;
     final profile = ref.read(currentAccessibilityProfileProvider);
     final mqAccessible = MediaQuery.accessibleNavigationOf(context);
     if (profile.screenReaderActive || mqAccessible) return;
 
     final strings = ref.read(appStringsProvider);
-    await ref.read(voiceSessionProvider.notifier).speak(
+    await ref
+        .read(voiceSessionProvider.notifier)
+        .speak(
           strings.welcomeZeroTouchVoicePrompt,
           context: context,
           force: true,
@@ -90,9 +94,24 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
   Future<void> _continueStandard() async {
     _cancelZeroTouchPrompt();
     await ref.read(voiceSessionProvider.notifier).stopAll();
-    await ref.read(accessibilityProfileProvider.notifier).completeOnboarding();
     if (!mounted) return;
     await Navigator.of(context).pushNamed(AppRoutes.registration);
+  }
+
+  Future<void> _playWelcomeHint(AppStrings strings) async {
+    _cancelZeroTouchPrompt();
+    final spoken = await ref
+        .read(voiceSessionProvider.notifier)
+        .speak(
+          strings.welcomeZeroTouchVoicePrompt,
+          context: context,
+          force: true,
+        );
+    if (!spoken && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(strings.welcomeSpeechUnavailable)));
+    }
   }
 
   @override
@@ -186,9 +205,24 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
                                 border: Border.all(color: scheme.outline),
                               ),
                               child: Text(
-                                strings.talkBackGuardActiveNotice,
+                                kIsWeb
+                                    ? strings.browserAccessibilityNotice
+                                    : strings.talkBackGuardActiveNotice,
                                 style: theme.textTheme.bodyMedium,
                                 softWrap: true,
+                              ),
+                            ),
+                          ] else ...[
+                            SizedBox(height: tokens.spacingUnit * 1.5),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton.icon(
+                                style: TextButton.styleFrom(
+                                  minimumSize: Size(48, tokens.minTouchTarget),
+                                ),
+                                onPressed: () => _playWelcomeHint(strings),
+                                icon: const Icon(Icons.volume_up_rounded),
+                                label: Text(strings.repeatVoiceButton),
                               ),
                             ),
                           ],
@@ -239,107 +273,103 @@ class _HeroAccessibilityCard extends ConsumerWidget {
     final borderRadius = BorderRadius.circular(20);
     final iconBadgeSize = 32.0 + (profile.textScaleFactor - 1) * 8;
 
-    return Semantics(
-      button: true,
-      label: '$title. $subtitle',
-      child: Material(
-        color: scheme.primary,
-        elevation: profile.isHighContrast ? 0 : 4,
-        shadowColor: scheme.primary.withValues(alpha: 0.35),
-        shape: RoundedRectangleBorder(
-          borderRadius: borderRadius,
-          side: BorderSide(
-            color: profile.isHighContrast ? scheme.outline : scheme.primary,
-            width: profile.isHighContrast ? 3 : 1,
-          ),
+    return Material(
+      color: scheme.primary,
+      elevation: profile.isHighContrast ? 0 : 4,
+      shadowColor: scheme.primary.withValues(alpha: 0.35),
+      shape: RoundedRectangleBorder(
+        borderRadius: borderRadius,
+        side: BorderSide(
+          color: profile.isHighContrast ? scheme.outline : scheme.primary,
+          width: profile.isHighContrast ? 3 : 1,
         ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () {
-            if (tokens.hapticFeedback) {
-              HapticFeedback.mediumImpact();
-            }
-            onTap();
-          },
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: math.max(110.0, minHeight)),
-            child: Padding(
-              padding: EdgeInsets.all(tokens.spacingUnit * 2.5),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Eye + Ear high-contrast icon pair (decorative)
-                  ExcludeSemantics(
-                    child: Wrap(
-                      spacing: tokens.spacingUnit * 1.5,
-                      runSpacing: tokens.spacingUnit,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        Container(
-                          padding: EdgeInsets.all(tokens.spacingUnit * 1.25),
-                          decoration: BoxDecoration(
-                            color: scheme.onPrimary.withValues(alpha: 0.16),
-                            borderRadius: BorderRadius.circular(14),
-                            border: profile.isHighContrast
-                                ? Border.all(color: scheme.onPrimary, width: 2)
-                                : null,
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.visibility_rounded,
-                                color: scheme.onPrimary,
-                                size: iconBadgeSize,
-                              ),
-                              SizedBox(width: tokens.spacingUnit),
-                              Icon(
-                                Icons.hearing_rounded,
-                                color: scheme.onPrimary,
-                                size: iconBadgeSize,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  SizedBox(height: tokens.spacingUnit * 2),
-                  Text(
-                    title,
-                    style: theme.textTheme.headlineSmall?.copyWith(
-                      color: scheme.onPrimary,
-                      fontWeight: FontWeight.w800,
-                    ),
-                    softWrap: true,
-                  ),
-                  SizedBox(height: tokens.spacingUnit),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () {
+          if (tokens.hapticFeedback) {
+            HapticFeedback.mediumImpact();
+          }
+          onTap();
+        },
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: math.max(110.0, minHeight)),
+          child: Padding(
+            padding: EdgeInsets.all(tokens.spacingUnit * 2.5),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Eye + Ear high-contrast icon pair (decorative)
+                ExcludeSemantics(
+                  child: Wrap(
+                    spacing: tokens.spacingUnit * 1.5,
+                    runSpacing: tokens.spacingUnit,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Expanded(
-                        child: Text(
-                          subtitle,
-                          style: theme.textTheme.bodyLarge?.copyWith(
-                            color: scheme.onPrimary.withValues(alpha: 0.94),
-                            fontWeight: FontWeight.w500,
-                          ),
-                          softWrap: true,
+                      Container(
+                        padding: EdgeInsets.all(tokens.spacingUnit * 1.25),
+                        decoration: BoxDecoration(
+                          color: scheme.onPrimary.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(14),
+                          border: profile.isHighContrast
+                              ? Border.all(color: scheme.onPrimary, width: 2)
+                              : null,
                         ),
-                      ),
-                      SizedBox(width: tokens.spacingUnit),
-                      ExcludeSemantics(
-                        child: Icon(
-                          Icons.arrow_forward_rounded,
-                          color: scheme.onPrimary,
-                          size: iconBadgeSize,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.visibility_rounded,
+                              color: scheme.onPrimary,
+                              size: iconBadgeSize,
+                            ),
+                            SizedBox(width: tokens.spacingUnit),
+                            Icon(
+                              Icons.hearing_rounded,
+                              color: scheme.onPrimary,
+                              size: iconBadgeSize,
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
-                ],
-              ),
+                ),
+                SizedBox(height: tokens.spacingUnit * 2),
+                Text(
+                  title,
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    color: scheme.onPrimary,
+                    fontWeight: FontWeight.w800,
+                  ),
+                  softWrap: true,
+                ),
+                SizedBox(height: tokens.spacingUnit),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        subtitle,
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          color: scheme.onPrimary.withValues(alpha: 0.94),
+                          fontWeight: FontWeight.w500,
+                        ),
+                        softWrap: true,
+                      ),
+                    ),
+                    SizedBox(width: tokens.spacingUnit),
+                    ExcludeSemantics(
+                      child: Icon(
+                        Icons.arrow_forward_rounded,
+                        color: scheme.onPrimary,
+                        size: iconBadgeSize,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         ),

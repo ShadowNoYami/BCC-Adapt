@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -71,16 +72,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Future<void> _openTransfers({QuickContact? initialContact}) async {
     await ref.read(voiceSessionProvider.notifier).stopAll();
     if (!mounted) return;
-    await Navigator.of(context).pushNamed(
-      AppRoutes.transfer,
-      arguments: initialContact,
-    );
+    await Navigator.of(context)
+        .pushNamed(AppRoutes.transfer, arguments: initialContact);
   }
 
-  void _showSimpleInfoSheet({
-    required String title,
-    required String body,
-  }) {
+  void _showSimpleInfoSheet({required String title, required String body}) {
     final tokens = AdaptiveTokens.of(context);
     final strings = ref.read(appStringsProvider);
     final theme = Theme.of(context);
@@ -103,11 +99,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 softWrap: true,
               ),
               SizedBox(height: tokens.spacingUnit * 1.5),
-              Text(
-                body,
-                style: theme.textTheme.bodyLarge,
-                softWrap: true,
-              ),
+              Text(body, style: theme.textTheme.bodyLarge, softWrap: true),
               SizedBox(height: tokens.spacingUnit * 2.5),
               AdaptiveActionButton(
                 label: strings.closeButton,
@@ -128,7 +120,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final tokens = AdaptiveTokens.of(context);
     final theme = Theme.of(context);
 
-    final isReflowed = profile.textScaleFactor >= 1.4 ||
+    final isReflowed =
+        profile.textScaleFactor >= 1.4 ||
         profile.cognitiveMode != CognitiveMode.fullBanking;
 
     final formattedBalance = MoneyFormatter.format(
@@ -177,14 +170,30 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               formattedBalance: formattedBalance,
               balanceWords: balanceWords,
               speakLabel: strings.speakBalanceButton,
-              onSpeakBalance: () {
-                ref.read(voiceSessionProvider.notifier).speak(
+              onSpeakBalance: () async {
+                final spoken = await ref
+                    .read(voiceSessionProvider.notifier)
+                    .speak(
                       strings.speakBalanceTemplate(
                         formattedBalance,
                         balanceWords,
                       ),
                       context: context,
+                      force: true,
                     );
+                if (!spoken && context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        profile.screenReaderActive
+                            ? (kIsWeb
+                                  ? strings.browserAccessibilityNotice
+                                  : strings.talkBackGuardActiveNotice)
+                            : strings.speechUnavailableNotice,
+                      ),
+                    ),
+                  );
+                }
               },
             ),
             SizedBox(height: tokens.spacingUnit * 2.5),
@@ -301,47 +310,39 @@ class _HomeTopHeader extends ConsumerWidget {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   const LanguageSwitchButton(),
-                  Semantics(
-                    button: true,
-                    label: accessibilityLabel,
-                    excludeSemantics: true,
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        if (tokens.hapticFeedback) {
-                          HapticFeedback.selectionClick();
-                        }
-                        onOpenAccessibility();
-                      },
-                      icon: ExcludeSemantics(
-                        child: Icon(
-                          Icons.accessibility_new_rounded,
-                          size: tokens.iconSize,
-                        ),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      if (tokens.hapticFeedback) {
+                        HapticFeedback.selectionClick();
+                      }
+                      onOpenAccessibility();
+                    },
+                    icon: ExcludeSemantics(
+                      child: Icon(
+                        Icons.accessibility_new_rounded,
+                        size: tokens.iconSize,
                       ),
-                      label: Text(
-                        accessibilityLabel,
-                        softWrap: true,
+                    ),
+                    label: Text(accessibilityLabel, softWrap: true),
+                    style: ElevatedButton.styleFrom(
+                      minimumSize: Size(minSide, minSide),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: tokens.spacingUnit * 1.75,
+                        vertical: tokens.spacingUnit,
                       ),
-                      style: ElevatedButton.styleFrom(
-                        minimumSize: Size(minSide, minSide),
-                        padding: EdgeInsets.symmetric(
-                          horizontal: tokens.spacingUnit * 1.75,
-                          vertical: tokens.spacingUnit,
-                        ),
-                        backgroundColor: profile.isHighContrast
-                            ? scheme.primary
-                            : scheme.surfaceContainerHighest,
-                        foregroundColor: profile.isHighContrast
-                            ? scheme.onPrimary
-                            : scheme.onSurface,
-                        side: BorderSide(
-                          color: profile.isHighContrast
-                              ? scheme.outline
-                              : scheme.primary,
-                          width: profile.isHighContrast
-                              ? tokens.borderWidth
-                              : 1.5,
-                        ),
+                      backgroundColor: profile.isHighContrast
+                          ? scheme.primary
+                          : scheme.surfaceContainerHighest,
+                      foregroundColor: profile.isHighContrast
+                          ? scheme.onPrimary
+                          : scheme.onSurface,
+                      side: BorderSide(
+                        color: profile.isHighContrast
+                            ? scheme.outline
+                            : scheme.primary,
+                        width: profile.isHighContrast
+                            ? tokens.borderWidth
+                            : 1.5,
                       ),
                     ),
                   ),
@@ -387,7 +388,6 @@ class _AccountBalanceCard extends StatelessWidget {
     final scheme = theme.colorScheme;
 
     return AdaptiveCard(
-      semanticLabel: '$accountTitle. $availableLabel: $formattedBalance. $balanceWords',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -566,9 +566,7 @@ class _FullBankingActionsGrid extends StatelessWidget {
                         SizedBox(height: tokens.spacingUnit),
                         Text(
                           item.$1,
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleMedium
+                          style: Theme.of(context).textTheme.titleMedium
                               ?.copyWith(fontWeight: FontWeight.w700),
                           softWrap: true,
                         ),
@@ -684,7 +682,8 @@ class _TransactionCard extends StatelessWidget {
     final title = transaction.localizedTitle(localeCode);
     final subtitle = transaction.localizedSubtitle(localeCode);
     final localDt = transaction.timestamp.toLocal();
-    final dateStr = '${localDt.day.toString().padLeft(2, '0')}.'
+    final dateStr =
+        '${localDt.day.toString().padLeft(2, '0')}.'
         '${localDt.month.toString().padLeft(2, '0')}.'
         '${localDt.year}';
     final amountStr = MoneyFormatter.format(
@@ -692,8 +691,9 @@ class _TransactionCard extends StatelessWidget {
       localeCode: localeCode,
       withSign: true,
     );
-    final amountColor =
-        transaction.isCredit ? tokens.success : scheme.onSurface;
+    final amountColor = transaction.isCredit
+        ? tokens.success
+        : scheme.onSurface;
 
     if (twoLineReflow) {
       // Strictly 2-row stacked layout: top = title + date, bottom = large amount.

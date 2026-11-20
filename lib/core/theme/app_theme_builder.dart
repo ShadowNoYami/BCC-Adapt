@@ -94,7 +94,7 @@ abstract final class AppThemeBuilder {
         scrolledUnderElevation: hc ? 0 : 1,
         centerTitle: false,
         titleTextStyle:
-            textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
         toolbarHeight: 56 + (profile.textScaleFactor - 1) * 32,
         shape: hc ? Border(bottom: hcSide) : null,
       ),

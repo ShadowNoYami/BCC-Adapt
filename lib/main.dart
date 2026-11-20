@@ -94,6 +94,9 @@ class _BccAdaptAppState extends ConsumerState<BccAdaptApp> {
         );
       },
       initialRoute: _resolvedInitialRoute,
+      onGenerateInitialRoutes: (name) => [
+        AppRoutes.onGenerateRoute(RouteSettings(name: name)),
+      ],
       onGenerateRoute: AppRoutes.onGenerateRoute,
       navigatorObservers: [_voiceRouteObserver],
     );

@@ -176,15 +176,28 @@ void main() {
       await notifier.setVoiceAssistantEnabled(true);
       await tester.pumpAndSettle();
 
+      final daughter = find.text('Дочь Алия');
+      await tester.ensureVisible(daughter);
+      await tester.tap(daughter);
+      await tester.pumpAndSettle();
+      expect(find.text('Кому: Дочь Алия'), findsOneWidget);
+      final manualAmount = tester.widget<TextField>(find.byType(TextField).last);
+      expect(manualAmount.controller!.text, isEmpty);
+
       // 1. Simulated voice draft for Arman 5000 ₸ (trusted contact -> no stranger warning)
       final demoArmanChip = find.text('«Перевести 5000 тенге Арману»');
+      expect(demoArmanChip, findsNothing);
+      final voiceOptions = find.text('Заполнить голосом');
+      await tester.ensureVisible(voiceOptions);
+      await tester.tap(voiceOptions);
+      await tester.pumpAndSettle();
       await tester.ensureVisible(demoArmanChip);
       await tester.tap(demoArmanChip);
       await tester.pumpAndSettle();
 
       expect(find.text('Пять тысяч тенге'), findsOneWidget);
-      expect(spy.spokenTexts.last, contains('Подготовлен перевод'));
-      expect(find.textContaining('Внимание! Перевод незнакомому'), findsNothing);
+      expect(spy.spokenTexts.last, contains('Данные заполнены'));
+      expect(find.text('Проверьте получателя'), findsNothing);
 
       // 2. Simulated voice draft to unknown phone for 60 000 ₸ -> triggers 5s anti-fraud cooling-off
       final demoStrangerChip =
@@ -194,33 +207,53 @@ void main() {
       await tester.pump();
 
       expect(find.text('Шестьдесят тысяч тенге'), findsOneWidget);
-      expect(find.textContaining('Внимание! Перевод незнакомому'), findsOneWidget);
-      expect(find.text('Подождите 5 сек...'), findsOneWidget);
+      expect(find.text('Проверьте получателя'), findsOneWidget);
+      expect(find.text('Отменить перевод'), findsOneWidget);
+      expect(find.text('На проверку 5 сек'), findsOneWidget);
 
       // Wait for 5 ticks (5 * 20ms) to finish cooling-off
       await tester.pump(const Duration(milliseconds: 150));
       await tester.pumpAndSettle();
 
+      // Editing the amount requires a fresh pause for the changed draft.
+      final amountField = find.byType(TextField).last;
+      await tester.ensureVisible(amountField);
+      await tester.enterText(amountField, '100 000');
+      await tester.pump();
+      expect(find.text('Сто тысяч тенге'), findsOneWidget);
+      expect(find.text('На проверку 5 сек'), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 150));
+      await tester.pumpAndSettle();
+
       // Hold-to-confirm button now visible for tremorProtection
-      final holdLabel = find.text('Удерживайте 1.5 сек для перевода');
+      final holdLabel = find.text('Подтвердить перевод');
       await tester.ensureVisible(holdLabel);
       expect(holdLabel, findsOneWidget);
+      expect(find.text('Нажмите и держите 1,5 секунды.'), findsOneWidget);
+      expect(find.text('Кому: +7 777 999 88 77'), findsOneWidget);
 
       // Hold pointer down for 1.6 seconds to confirm transfer
       final center = tester.getCenter(holdLabel);
+      final shortGesture = await tester.startGesture(center);
+      await tester.pump(const Duration(milliseconds: 450));
+      await shortGesture.up();
+      await tester.pumpAndSettle();
+      expect(find.text('Перевод отправлен'), findsNothing);
+
       final gesture = await tester.startGesture(center);
-      await tester.pump(const Duration(milliseconds: 50));
-      await tester.pump(const Duration(milliseconds: 1600));
-      await gesture.up();
+      // The release event can arrive before a throttled timer callback.
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('Перевод отправлен'), findsNothing);
+      await gesture.up(timeStamp: const Duration(milliseconds: 1600));
       await tester.pumpAndSettle();
 
-      // Transfer executed: receipt displayed and MockBankRepository balance updated (245800 - 60000 = 185800)
-      expect(find.text('Перевод выполнен успешно'), findsOneWidget);
+      // Transfer executed: receipt displayed and the balance updated.
+      expect(find.text('Перевод отправлен'), findsOneWidget);
       expect(
         container.read(mockBankRepositoryProvider).primaryAccount.balanceTenge,
-        185800,
+        145800,
       );
-      expect(spy.spokenTexts.last, 'Перевод выполнен успешно');
+      expect(spy.spokenTexts.last, 'Перевод отправлен');
       expect(tester.takeException(), isNull);
     });
 
@@ -252,10 +285,9 @@ void main() {
       await notifier.setCognitiveMode(CognitiveMode.guidedStepByStep);
       await tester.pumpAndSettle();
 
-      expect(find.text('Живое превью интерфейса'), findsOneWidget);
+      expect(find.text('Пример экрана'), findsOneWidget);
 
-      // Tap "Сбросить до стандартного BCC"
-      final resetBtn = find.text('Сбросить до стандартного BCC');
+      final resetBtn = find.text('Вернуть обычный вид');
       await tester.ensureVisible(resetBtn);
       await tester.tap(resetBtn);
       await tester.pumpAndSettle();

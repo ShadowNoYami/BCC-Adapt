@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -71,9 +74,9 @@ class VoiceAccessibilityService {
     FlutterTts? tts,
     SpeechToText? stt,
     VoiceTransferParser? parser,
-  })  : _tts = tts ?? FlutterTts(),
-        _stt = stt ?? SpeechToText(),
-        _parser = parser ?? const VoiceTransferParser();
+  }) : _tts = tts ?? FlutterTts(),
+       _stt = stt ?? SpeechToText(),
+       _parser = parser ?? const VoiceTransferParser();
 
   /// Silence timeout before Push-to-Talk automatically finalises.
   static const Duration silenceTimeout = Duration(milliseconds: 3500);
@@ -119,7 +122,8 @@ class VoiceAccessibilityService {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return false;
 
-    final mqAccessible = context != null &&
+    final mqAccessible =
+        context != null &&
         context.mounted &&
         MediaQuery.accessibleNavigationOf(context);
 
@@ -136,8 +140,8 @@ class VoiceAccessibilityService {
       if (_stt.isListening) {
         await _stt.stop();
       }
-      await _ensureTtsConfigured(profile.localeCode);
-      await _tts.stop();
+      await stopSpeaking();
+      if (!await _ensureTtsConfigured(profile.localeCode)) return false;
       await _tts.speak(trimmed);
       return true;
     } catch (e, st) {
@@ -147,6 +151,7 @@ class VoiceAccessibilityService {
   }
 
   Future<void> stopSpeaking() async {
+    if (!_ttsInitialized) return;
     try {
       await _tts.stop();
     } catch (e) {
@@ -159,7 +164,13 @@ class VoiceAccessibilityService {
     try {
       final status = await Permission.microphone.status;
       if (status.isGranted) return true;
-      final result = await Permission.microphone.request();
+      final request = Permission.microphone.request();
+      final result = await (kIsWeb
+          ? request.timeout(
+              const Duration(seconds: 8),
+              onTimeout: () => PermissionStatus.denied,
+            )
+          : request);
       return result.isGranted;
     } catch (e) {
       debugPrint('Microphone permission check failed: $e');
@@ -252,8 +263,13 @@ class VoiceAccessibilityService {
     return _parser.parse(recognizedText, localeCode: localeCode);
   }
 
-  Future<void> _ensureTtsConfigured(String localeCode) async {
+  Future<bool> _ensureTtsConfigured(String localeCode) async {
     final targetLocale = localeCode == 'kk' ? 'kk-KZ' : 'ru-RU';
+    if (kIsWeb &&
+        _currentTtsLocale != targetLocale &&
+        await _tts.isLanguageAvailable(targetLocale) != true) {
+      return false;
+    }
     if (!_ttsInitialized) {
       await _tts.setSpeechRate(0.46);
       await _tts.setVolume(1.0);
@@ -264,6 +280,7 @@ class VoiceAccessibilityService {
       await _tts.setLanguage(targetLocale);
       _currentTtsLocale = targetLocale;
     }
+    return true;
   }
 
   Future<String> _resolveSttLocaleId(String localeCode) async {
@@ -287,8 +304,8 @@ class VoiceAccessibilityService {
   }
 
   void dispose() {
-    _tts.stop();
-    _stt.cancel();
+    unawaited(stopSpeaking());
+    unawaited(cancelListening());
   }
 }
 
@@ -313,7 +330,7 @@ class VoiceSessionNotifier extends Notifier<VoiceSessionState> {
       context: context,
       force: force,
     );
-    state = state.copyWith(isSpeaking: false);
+    if (ref.mounted) state = state.copyWith(isSpeaking: false);
     return spoken;
   }
 
@@ -387,7 +404,8 @@ class VoiceSessionNotifier extends Notifier<VoiceSessionState> {
   /// Interrupts both active speech and active microphone listening on route
   /// transitions or screen disposal.
   Future<void> stopAll() async {
-    final wasListening = state.status == VoiceListeningStatus.listening ||
+    final wasListening =
+        state.status == VoiceListeningStatus.listening ||
         state.status == VoiceListeningStatus.initializing;
     await _service.stopAll();
     if (state.isSpeaking || wasListening) {
@@ -434,5 +452,5 @@ final voiceAccessibilityServiceProvider = Provider<VoiceAccessibilityService>((
 
 final voiceSessionProvider =
     NotifierProvider<VoiceSessionNotifier, VoiceSessionState>(
-  VoiceSessionNotifier.new,
-);
+      VoiceSessionNotifier.new,
+    );

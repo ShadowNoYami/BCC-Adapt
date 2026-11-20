@@ -178,4 +178,12 @@ class VoiceTransferParser {
     return '+${d[0]} ${d.substring(1, 4)} ${d.substring(4, 7)} '
         '${d.substring(7, 9)} ${d.substring(9, 11)}';
   }
+
+  static String? normalizePhone(String input) {
+    final trimmed = input.trim();
+    final match = _phone.matchAsPrefix(trimmed);
+    if (match == null || match.end != trimmed.length) return null;
+    return '+7${match.group(1)}${match.group(2)}'
+        '${match.group(3)}${match.group(4)}';
+  }
 }

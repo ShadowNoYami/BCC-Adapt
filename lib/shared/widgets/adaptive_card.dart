@@ -71,20 +71,23 @@ class _AdaptiveCardState extends ConsumerState<AdaptiveCard> {
         ? (isHc ? 3.5 : 2.5)
         : (isHc ? tokens.borderWidth : 1.0);
 
-    final resolvedBorderColor = widget.borderColor ??
+    final resolvedBorderColor =
+        widget.borderColor ??
         (widget.selected
             ? (profile.isDark ? tokens.emphasis : scheme.primary)
             : (isHc ? scheme.outline : scheme.outlineVariant));
 
-    final resolvedBg = widget.backgroundColor ??
+    final resolvedBg =
+        widget.backgroundColor ??
         (widget.selected && !isHc
             ? scheme.primaryContainer
             : (isHc ? scheme.surfaceContainer : scheme.surface));
 
-    final effectivePadding = widget.padding ??
-        EdgeInsets.all(tokens.spacingUnit * 2);
+    final effectivePadding =
+        widget.padding ?? EdgeInsets.all(tokens.spacingUnit * 2);
 
-    final outerMargin = widget.margin ??
+    final outerMargin =
+        widget.margin ??
         (profile.motorLevel == MotorAssistanceLevel.tremorProtection &&
                 widget.onTap != null
             ? const EdgeInsets.symmetric(vertical: 8)
@@ -100,10 +103,14 @@ class _AdaptiveCardState extends ConsumerState<AdaptiveCard> {
       child: widget.child,
     );
 
-    if (widget.onTap != null) {
+    final onTap = widget.onTap == null
+        ? null
+        : () => _handleTap(profile, tokens);
+    if (onTap != null) {
       content = InkWell(
         borderRadius: borderRadius,
-        onTap: () => _handleTap(profile, tokens),
+        onTap: onTap,
+        excludeFromSemantics: true,
         child: content,
       );
     }
@@ -112,7 +119,10 @@ class _AdaptiveCardState extends ConsumerState<AdaptiveCard> {
       padding: outerMargin,
       child: Semantics(
         container: true,
-        button: widget.onTap != null,
+        explicitChildNodes: onTap == null,
+        button: onTap == null ? null : true,
+        onTap: onTap,
+        excludeSemantics: onTap != null && widget.semanticLabel != null,
         selected: widget.selected,
         label: widget.semanticLabel,
         hint: widget.semanticHint,
