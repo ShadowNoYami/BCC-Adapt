@@ -73,12 +73,30 @@ abstract final class AppThemeBuilder {
       fontWeight: FontWeight.w700,
     );
 
+    final focusSide = BorderSide(
+      color: palette.focus,
+      width: hc ? palette.borderWidth + 1.5 : 2.5,
+    );
+    WidgetStateProperty<BorderSide?> focusableSide(BorderSide normalSide) =>
+        WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.focused) ? focusSide : normalSide,
+        );
+    final buttonOverlay = WidgetStateProperty.resolveWith((states) {
+      if (states.contains(WidgetState.focused)) {
+        return palette.focus.withValues(alpha: hc ? 0.35 : 0.22);
+      }
+      if (states.contains(WidgetState.pressed)) {
+        return palette.primary.withValues(alpha: 0.14);
+      }
+      return null;
+    });
+
     return base.copyWith(
       scaffoldBackgroundColor: palette.background,
       canvasColor: palette.background,
       textTheme: textTheme,
       primaryTextTheme: textTheme,
-      focusColor: palette.focus.withValues(alpha: hc ? 0.35 : 0.2),
+      focusColor: palette.focus.withValues(alpha: hc ? 0.35 : 0.22),
       materialTapTargetSize: MaterialTapTargetSize.padded,
       visualDensity: VisualDensity.standard,
       iconTheme: IconThemeData(color: palette.onSurface, size: tokens.iconSize),
@@ -117,6 +135,9 @@ abstract final class AppThemeBuilder {
           shape: buttonShape,
           textStyle: labelStyle,
           elevation: hc ? 0 : 1,
+        ).copyWith(
+          overlayColor: buttonOverlay,
+          side: focusableSide(hc ? hcSide : BorderSide.none),
         ),
       ),
       filledButtonTheme: FilledButtonThemeData(
@@ -127,6 +148,9 @@ abstract final class AppThemeBuilder {
           padding: buttonPadding,
           shape: buttonShape,
           textStyle: labelStyle,
+        ).copyWith(
+          overlayColor: buttonOverlay,
+          side: focusableSide(hc ? hcSide : BorderSide.none),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
@@ -140,6 +164,14 @@ abstract final class AppThemeBuilder {
             width: hc ? palette.borderWidth : 1.5,
           ),
           textStyle: labelStyle,
+        ).copyWith(
+          overlayColor: buttonOverlay,
+          side: focusableSide(
+            BorderSide(
+              color: hc ? palette.border : palette.primary,
+              width: hc ? palette.borderWidth : 1.5,
+            ),
+          ),
         ),
       ),
       textButtonTheme: TextButtonThemeData(
@@ -150,6 +182,9 @@ abstract final class AppThemeBuilder {
           textStyle: labelStyle?.copyWith(
             decoration: hc ? TextDecoration.underline : null,
           ),
+        ).copyWith(
+          overlayColor: buttonOverlay,
+          side: focusableSide(BorderSide.none),
         ),
       ),
       iconButtonTheme: IconButtonThemeData(
@@ -157,6 +192,9 @@ abstract final class AppThemeBuilder {
           foregroundColor: palette.onSurface,
           minimumSize: Size(target, target),
           iconSize: tokens.iconSize,
+        ).copyWith(
+          overlayColor: buttonOverlay,
+          side: focusableSide(BorderSide.none),
         ),
       ),
       floatingActionButtonTheme: FloatingActionButtonThemeData(
@@ -189,11 +227,17 @@ abstract final class AppThemeBuilder {
         border: _inputBorder(radius, palette.border, palette.borderWidth),
         enabledBorder:
             _inputBorder(radius, palette.border, palette.borderWidth),
-        focusedBorder:
-            _inputBorder(radius, palette.focus, palette.borderWidth + 1),
+        focusedBorder: _inputBorder(
+          radius,
+          palette.focus,
+          hc ? palette.borderWidth + 1.5 : 2.5,
+        ),
         errorBorder: _inputBorder(radius, palette.error, palette.borderWidth),
-        focusedErrorBorder:
-            _inputBorder(radius, palette.error, palette.borderWidth + 1),
+        focusedErrorBorder: _inputBorder(
+          radius,
+          palette.error,
+          hc ? palette.borderWidth + 1.5 : 2.5,
+        ),
       ),
       listTileTheme: ListTileThemeData(
         minVerticalPadding: tokens.spacingUnit,
@@ -217,6 +261,9 @@ abstract final class AppThemeBuilder {
         backgroundColor: palette.onSurface,
         contentTextStyle:
             textTheme.bodyLarge?.copyWith(color: palette.background),
+        actionTextColor: palette.brightness == Brightness.dark
+            ? AppPalette.hcLightEmerald
+            : const Color(0xFF00E676),
         behavior: SnackBarBehavior.floating,
       ),
       switchTheme: SwitchThemeData(

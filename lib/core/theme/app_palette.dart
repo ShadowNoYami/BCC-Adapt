@@ -64,29 +64,31 @@ class AppPalette {
   // Standard BCC (Bank CenterCredit brand)
   // ---------------------------------------------------------------------------
   static const Color bccEmerald = Color(0xFF00A859);
+  static const Color bccEmeraldAccessible = Color(0xFF007A3F);
   static const Color bccGraphite = Color(0xFF1A1D1F);
   static const Color bccWhite = Color(0xFFFFFFFF);
 
   static const AppPalette standardBcc = AppPalette(
     brightness: Brightness.light,
-    background: bccWhite,
+    background: Color(0xFFF5F7F6),
     surface: bccWhite,
-    surfaceVariant: Color(0xFFF3F6F4),
+    surfaceVariant: Color(0xFFEDF2EF),
     onSurface: bccGraphite,
-    onSurfaceMuted: Color(0xFF5B6166),
-    primary: bccEmerald,
+    onSurfaceMuted: Color(0xFF52585D),
+    // Verified AA >= 4.5:1 (~5.4:1) for white text on brand emerald buttons.
+    primary: bccEmeraldAccessible,
     onPrimary: bccWhite,
-    // Darker brand shade for green TEXT on white (AA 5.6:1).
-    accentText: Color(0xFF007A3F),
+    accentText: bccEmeraldAccessible,
     emphasis: bccGraphite,
-    border: Color(0xFFD9DEDB),
-    borderWidth: 1,
-    divider: Color(0xFFE9ECEA),
-    error: Color(0xFFD32F2F),
+    // >= 3:1 UI component contrast against both #FFFFFF and #EDF2EF.
+    border: Color(0xFF767F7B),
+    borderWidth: 1.5,
+    divider: Color(0xFFE2E7E4),
+    error: Color(0xFFC62828),
     onError: bccWhite,
-    warning: Color(0xFFB26A00),
-    success: bccEmerald,
-    focus: Color(0xFF00753D),
+    warning: Color(0xFF9A5B00),
+    success: bccEmeraldAccessible,
+    focus: Color(0xFF005C30),
   );
 
   // ---------------------------------------------------------------------------

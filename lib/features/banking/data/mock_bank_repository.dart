@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/l10n/money_formatter.dart';
 import '../../../core/voice/domain/recipient_matcher.dart';
 import '../domain/bank_models.dart';
 
@@ -134,20 +135,23 @@ class MockBankRepository extends Notifier<BankDashboardState> {
     return null;
   }
 
-  /// Executes a mock transfer, deducting from `#bcc карта` and appending a
-  /// transaction entry. Returns `true` if successful.
+  /// Executes a mock transfer, deducting from `#bcc карта` using exact tiyn
+  /// math and appending a transaction entry. Returns `true` if successful.
   bool executeTransfer({
     required double amountTenge,
     required String recipientTitleRu,
     String? recipientTitleKk,
     String? details,
   }) {
-    if (amountTenge <= 0 || amountTenge > state.primaryAccount.balanceTenge) {
+    final amountTiyn = MoneyFormatter.toTiyn(amountTenge);
+    final balanceTiyn = MoneyFormatter.toTiyn(state.primaryAccount.balanceTenge);
+    if (amountTiyn <= 0 || amountTiyn > balanceTiyn) {
       return false;
     }
 
+    final remainingTiyn = balanceTiyn - amountTiyn;
     final updatedAccount = state.primaryAccount.copyWith(
-      balanceTenge: state.primaryAccount.balanceTenge - amountTenge,
+      balanceTenge: remainingTiyn / 100.0,
     );
 
     final newTx = BankTransaction(
@@ -156,7 +160,7 @@ class MockBankRepository extends Notifier<BankDashboardState> {
       titleKk: recipientTitleKk ?? recipientTitleRu,
       subtitleRu: details ?? 'Перевод с #bcc карта',
       subtitleKk: details ?? '#bcc картасынан аударым',
-      amountTenge: -amountTenge,
+      amountTenge: -amountTiyn / 100.0,
       timestamp: DateTime.now().toUtc(),
       type: BankTransactionType.transfer,
     );

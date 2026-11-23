@@ -120,9 +120,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final tokens = AdaptiveTokens.of(context);
     final theme = Theme.of(context);
 
+    final isAdaptiveChrome =
+        profile.textScaleFactor >= 1.25 ||
+        profile.isHighContrast ||
+        profile.isSimplifiedUi ||
+        profile.motorLevel != MotorAssistanceLevel.standard ||
+        profile.voiceAssistantEnabled;
     final isReflowed =
-        profile.textScaleFactor >= 1.4 ||
-        profile.cognitiveMode != CognitiveMode.fullBanking;
+        profile.textScaleFactor >= 1.4 || profile.isSimplifiedUi;
 
     final formattedBalance = MoneyFormatter.format(
       bank.primaryAccount.balanceTenge,
@@ -136,13 +141,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
     return Scaffold(
       body: SafeArea(
-        child: ListView(
+        child: SingleChildScrollView(
           padding: EdgeInsets.all(tokens.spacingUnit * 2),
-          children: [
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
             // Top Header: Greeting + Language Switcher + >= 48x48 Accessibility btn
             _HomeTopHeader(
               greeting: strings.homeGreeting,
               accessibilityLabel: strings.navAccessibility,
+              isAdaptiveChrome: isAdaptiveChrome,
               onOpenAccessibility: () async {
                 await ref.read(voiceSessionProvider.notifier).stopAll();
                 if (!context.mounted) return;
@@ -157,12 +165,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 formattedBalance,
                 balanceWords,
               ),
+              showLanguageSwitch: false,
             ),
             if (profile.voiceAssistantEnabled)
               SizedBox(height: tokens.spacingUnit * 2),
 
             // #bcc card account summary (zero ellipsis on balance!)
             _AccountBalanceCard(
+              isAdaptiveChrome: isAdaptiveChrome,
               accountTitle:
                   '${bank.primaryAccount.localizedTitle(profile.localeCode)} '
                   '${bank.primaryAccount.maskedPan}',
@@ -199,7 +209,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             SizedBox(height: tokens.spacingUnit * 2.5),
 
             // Adaptive Layout Reflow: Grid/Row vs Strict Single-Column List
-            if (isReflowed)
+            if (isReflowed) ...[
               _ReflowedActionsColumn(
                 strings: strings,
                 tokens: tokens,
@@ -207,8 +217,33 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 onPayments: () =>
                     _openTransfers(initialContact: utilitiesContact),
                 onHistory: _scrollToHistory,
-              )
-            else ...[
+              ),
+              if (!profile.isSimplifiedUi) ...[
+                SizedBox(height: tokens.spacingUnit * 2),
+                _ExpandableFullServicesBlock(
+                  strings: strings,
+                  tokens: tokens,
+                  localeCode: profile.localeCode,
+                  cashbackTenge: bank.primaryAccount.cashbackTenge,
+                  onMyBank: () => _showSimpleInfoSheet(
+                    title: strings.actionMyBank,
+                    body:
+                        '${bank.primaryAccount.localizedTitle(profile.localeCode)} '
+                        '(${bank.primaryAccount.maskedPan})\nIBAN: ${bank.primaryAccount.iban}',
+                  ),
+                  onCashback: () => _showSimpleInfoSheet(
+                    title: strings.actionCashback,
+                    body:
+                        '${strings.cashbackBalanceLabel}: '
+                        '${MoneyFormatter.format(bank.primaryAccount.cashbackTenge, localeCode: profile.localeCode)}',
+                  ),
+                  onDeposits: () => _showSimpleInfoSheet(
+                    title: strings.actionDeposits,
+                    body: strings.depositPromoText,
+                  ),
+                ),
+              ],
+            ] else ...[
               _FullBankingActionsGrid(
                 strings: strings,
                 tokens: tokens,
@@ -231,6 +266,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   title: strings.actionDeposits,
                   body: strings.depositPromoText,
                 ),
+                onHistory: _scrollToHistory,
               ),
               SizedBox(height: tokens.spacingUnit * 2),
               _PromoAndAnalyticsBlock(
@@ -266,7 +302,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ),
               ),
             ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -277,11 +314,13 @@ class _HomeTopHeader extends ConsumerWidget {
   const _HomeTopHeader({
     required this.greeting,
     required this.accessibilityLabel,
+    required this.isAdaptiveChrome,
     required this.onOpenAccessibility,
   });
 
   final String greeting;
   final String accessibilityLabel;
+  final bool isAdaptiveChrome;
   final VoidCallback onOpenAccessibility;
 
   @override
@@ -295,62 +334,91 @@ class _HomeTopHeader extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SizedBox(
-          width: double.infinity,
-          child: Wrap(
-            alignment: WrapAlignment.spaceBetween,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            spacing: tokens.spacingUnit * 1.25,
-            runSpacing: tokens.spacingUnit * 1.25,
+        if (!isAdaptiveChrome)
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              const BccLogo(),
-              Wrap(
-                spacing: tokens.spacingUnit,
-                runSpacing: tokens.spacingUnit,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  const LanguageSwitchButton(),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      if (tokens.hapticFeedback) {
-                        HapticFeedback.selectionClick();
-                      }
-                      onOpenAccessibility();
-                    },
-                    icon: ExcludeSemantics(
-                      child: Icon(
-                        Icons.accessibility_new_rounded,
-                        size: tokens.iconSize,
-                      ),
-                    ),
-                    label: Text(accessibilityLabel, softWrap: true),
-                    style: ElevatedButton.styleFrom(
-                      minimumSize: Size(minSide, minSide),
-                      padding: EdgeInsets.symmetric(
-                        horizontal: tokens.spacingUnit * 1.75,
-                        vertical: tokens.spacingUnit,
-                      ),
-                      backgroundColor: profile.isHighContrast
-                          ? scheme.primary
-                          : scheme.surfaceContainerHighest,
-                      foregroundColor: profile.isHighContrast
-                          ? scheme.onPrimary
-                          : scheme.onSurface,
-                      side: BorderSide(
-                        color: profile.isHighContrast
-                            ? scheme.outline
-                            : scheme.primary,
-                        width: profile.isHighContrast
-                            ? tokens.borderWidth
-                            : 1.5,
-                      ),
+              const Expanded(child: BccLogo(compact: true)),
+              SizedBox(width: tokens.spacingUnit),
+              const LanguageSwitchButton(compact: true),
+              SizedBox(width: tokens.spacingUnit),
+              Semantics(
+                button: true,
+                label: accessibilityLabel,
+                child: IconButton(
+                  tooltip: accessibilityLabel,
+                  onPressed: onOpenAccessibility,
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size(48, 48),
+                    backgroundColor: scheme.surface,
+                    foregroundColor: scheme.onSurface,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      side: BorderSide(color: scheme.outlineVariant),
                     ),
                   ),
-                ],
+                  icon: const Icon(Icons.accessibility_new_rounded),
+                ),
               ),
             ],
+          )
+        else
+          SizedBox(
+            width: double.infinity,
+            child: Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: tokens.spacingUnit * 1.25,
+              runSpacing: tokens.spacingUnit * 1.25,
+              children: [
+                const BccLogo(),
+                Wrap(
+                  spacing: tokens.spacingUnit,
+                  runSpacing: tokens.spacingUnit,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    const LanguageSwitchButton(),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        if (tokens.hapticFeedback) {
+                          HapticFeedback.selectionClick();
+                        }
+                        onOpenAccessibility();
+                      },
+                      icon: ExcludeSemantics(
+                        child: Icon(
+                          Icons.accessibility_new_rounded,
+                          size: tokens.iconSize,
+                        ),
+                      ),
+                      label: Text(accessibilityLabel, softWrap: true),
+                      style: ElevatedButton.styleFrom(
+                        minimumSize: Size(minSide, minSide),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: tokens.spacingUnit * 1.75,
+                          vertical: tokens.spacingUnit,
+                        ),
+                        backgroundColor: profile.isHighContrast
+                            ? scheme.primary
+                            : scheme.surfaceContainerHighest,
+                        foregroundColor: profile.isHighContrast
+                            ? scheme.onPrimary
+                            : scheme.onSurface,
+                        side: BorderSide(
+                          color: profile.isHighContrast
+                              ? scheme.outline
+                              : scheme.primary,
+                          width: profile.isHighContrast
+                              ? tokens.borderWidth
+                              : 1.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
         SizedBox(height: tokens.spacingUnit * 1.5),
         Text(
           greeting,
@@ -366,6 +434,7 @@ class _HomeTopHeader extends ConsumerWidget {
 
 class _AccountBalanceCard extends StatelessWidget {
   const _AccountBalanceCard({
+    required this.isAdaptiveChrome,
     required this.accountTitle,
     required this.availableLabel,
     required this.formattedBalance,
@@ -374,6 +443,7 @@ class _AccountBalanceCard extends StatelessWidget {
     required this.onSpeakBalance,
   });
 
+  final bool isAdaptiveChrome;
   final String accountTitle;
   final String availableLabel;
   final String formattedBalance;
@@ -386,6 +456,80 @@ class _AccountBalanceCard extends StatelessWidget {
     final tokens = AdaptiveTokens.of(context);
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+
+    if (!isAdaptiveChrome) {
+      return Semantics(
+        container: true,
+        explicitChildNodes: true,
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF1A1D1F), Color(0xFF0E3B26)],
+            ),
+            borderRadius: BorderRadius.circular(tokens.cornerRadius + 4),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF0E3B26).withValues(alpha: 0.22),
+                blurRadius: 16,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          padding: EdgeInsets.all(tokens.spacingUnit * 2.5),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  ExcludeSemantics(
+                    child: Icon(
+                      Icons.credit_card_rounded,
+                      color: const Color(0xFF69F0AE),
+                      size: tokens.iconSize,
+                    ),
+                  ),
+                  SizedBox(width: tokens.spacingUnit),
+                  Expanded(
+                    child: Text(
+                      accountTitle,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      softWrap: true,
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: tokens.spacingUnit * 1.75),
+              Text(
+                availableLabel,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: const Color(0xFFD5E3DB),
+                  fontWeight: FontWeight.w600,
+                ),
+                softWrap: true,
+              ),
+              SizedBox(height: tokens.spacingUnit * 0.5),
+              // Strictly NO TextOverflow.ellipsis on balance!
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  formattedBalance,
+                  style: theme.textTheme.displaySmall?.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return AdaptiveCard(
       child: Column(
@@ -504,7 +648,120 @@ class _ReflowedActionsColumn extends StatelessWidget {
   }
 }
 
-/// Compact multi-column grid shown only when textScaleFactor < 1.4 and
+/// Expandable single-column services block shown in `fullBanking` mode when
+/// text scaling reflows the layout (`>= 1.4x`), keeping secondary services
+/// accessible without cluttering the top viewport.
+class _ExpandableFullServicesBlock extends StatelessWidget {
+  const _ExpandableFullServicesBlock({
+    required this.strings,
+    required this.tokens,
+    required this.localeCode,
+    required this.cashbackTenge,
+    required this.onMyBank,
+    required this.onCashback,
+    required this.onDeposits,
+  });
+
+  final AppStrings strings;
+  final AdaptiveTokens tokens;
+  final String localeCode;
+  final double cashbackTenge;
+  final VoidCallback onMyBank;
+  final VoidCallback onCashback;
+  final VoidCallback onDeposits;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final items = [
+      (strings.actionMyBank, Icons.account_balance_rounded, onMyBank),
+      (strings.actionCashback, Icons.percent_rounded, onCashback),
+      (strings.actionDeposits, Icons.savings_rounded, onDeposits),
+    ];
+
+    return AdaptiveCard(
+      padding: EdgeInsets.zero,
+      child: ExpansionTile(
+        initiallyExpanded: false,
+        maintainState: false,
+        minTileHeight: tokens.minTouchTarget,
+        leading: ExcludeSemantics(
+          child: Icon(
+            Icons.apps_rounded,
+            color: tokens.accentText,
+            size: tokens.iconSize,
+          ),
+        ),
+        title: Text(
+          strings.allServicesExpandTitle,
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+          softWrap: true,
+        ),
+        tilePadding: EdgeInsets.symmetric(
+          horizontal: tokens.spacingUnit * 2,
+          vertical: tokens.spacingUnit * 0.5,
+        ),
+        childrenPadding: EdgeInsets.fromLTRB(
+          tokens.spacingUnit * 1.5,
+          0,
+          tokens.spacingUnit * 1.5,
+          tokens.spacingUnit * 1.5,
+        ),
+        children: [
+          ...items.map(
+            (item) => Padding(
+              padding: EdgeInsets.only(bottom: tokens.spacingUnit),
+              child: AdaptiveCard(
+                semanticLabel: item.$1,
+                onTap: item.$3,
+                child: Row(
+                  children: [
+                    ExcludeSemantics(
+                      child: Icon(
+                        item.$2,
+                        color: tokens.accentText,
+                        size: tokens.iconSize,
+                      ),
+                    ),
+                    SizedBox(width: tokens.spacingUnit * 1.5),
+                    Expanded(
+                      child: Text(
+                        item.$1,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                        softWrap: true,
+                      ),
+                    ),
+                    ExcludeSemantics(
+                      child: Icon(
+                        Icons.chevron_right_rounded,
+                        color: scheme.onSurfaceVariant,
+                        size: tokens.iconSize,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          SizedBox(height: tokens.spacingUnit * 0.5),
+          _PromoAndAnalyticsBlock(
+            strings: strings,
+            tokens: tokens,
+            localeCode: localeCode,
+            cashbackTenge: cashbackTenge,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Compact multi-column 2x3 grid shown only when textScaleFactor < 1.4 and
 /// cognitiveMode == fullBanking.
 class _FullBankingActionsGrid extends StatelessWidget {
   const _FullBankingActionsGrid({
@@ -515,6 +772,7 @@ class _FullBankingActionsGrid extends StatelessWidget {
     required this.onMyBank,
     required this.onCashback,
     required this.onDeposits,
+    required this.onHistory,
   });
 
   final AppStrings strings;
@@ -524,15 +782,18 @@ class _FullBankingActionsGrid extends StatelessWidget {
   final VoidCallback onMyBank;
   final VoidCallback onCashback;
   final VoidCallback onDeposits;
+  final VoidCallback onHistory;
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final items = [
       (strings.actionTransfers, Icons.swap_horiz_rounded, onTransfers),
       (strings.actionPayments, Icons.receipt_long_rounded, onPayments),
       (strings.actionMyBank, Icons.account_balance_rounded, onMyBank),
       (strings.actionCashback, Icons.percent_rounded, onCashback),
       (strings.actionDeposits, Icons.savings_rounded, onDeposits),
+      (strings.navHistory, Icons.history_rounded, onHistory),
     ];
 
     return LayoutBuilder(
@@ -556,12 +817,24 @@ class _FullBankingActionsGrid extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        ExcludeSemantics(
-                          child: Icon(
-                            item.$2,
-                            size: tokens.iconSize * 1.15,
-                            color: tokens.accentText,
-                          ),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            ExcludeSemantics(
+                              child: Icon(
+                                item.$2,
+                                size: tokens.iconSize * 1.15,
+                                color: tokens.accentText,
+                              ),
+                            ),
+                            ExcludeSemantics(
+                              child: Icon(
+                                Icons.chevron_right_rounded,
+                                size: 20,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
                         ),
                         SizedBox(height: tokens.spacingUnit),
                         Text(

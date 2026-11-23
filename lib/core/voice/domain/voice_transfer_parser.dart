@@ -73,6 +73,9 @@ class VoiceTransferParser {
 
   /// Words removed when extracting the recipient phrase.
   static const Set<String> _stopWords = {
+    // RU greetings / fillers
+    'привет', 'здравствуйте', 'здравствуй', 'алло', 'слушай', 'спасибо',
+    'помощь', 'банк', 'бцк', 'bcc',
     // RU verbs / fillers
     'перевести', 'переведи', 'переведите', 'перевод', 'переводить',
     'отправить', 'отправь', 'отправьте', 'отправка', 'скинуть', 'скинь',
@@ -85,7 +88,8 @@ class VoiceTransferParser {
     'счет', 'счету', 'сумму', 'сумма', 'суммой',
     // Currency
     'тенге', 'теңге', 'теңгені', 'тг', 'тиын', 'тиынов', 'рублей',
-    // KK verbs / fillers
+    // KK greetings / verbs / fillers
+    'сәлем', 'сәлеметсіз', 'рахмет', 'көмек',
     'аудар', 'аудару', 'аударыңыз', 'аударшы', 'жібер', 'жіберу',
     'жіберші', 'жіберіңіз', 'салу', 'сал', 'салшы', 'өтінемін', 'ақша',
     'ақшаны', 'маған', 'керек', 'нөмір', 'нөмірге', 'нөміріне',
@@ -148,8 +152,7 @@ class VoiceTransferParser {
           : AmountInWords.format(amount, localeCode: localeCode),
       amountFormatted: amount == null
           ? null
-          : MoneyFormatter.format(amount,
-              localeCode: localeCode, showTiyn: amount % 1 != 0),
+          : MoneyFormatter.format(amount, localeCode: localeCode),
     );
   }
 

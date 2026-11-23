@@ -14,9 +14,14 @@ import 'adaptive_card.dart';
 /// (and growing with [AdaptiveTokens.minTouchTarget]) without text overflow
 /// at up to 200% text scaling.
 class LanguageSwitchButton extends ConsumerWidget {
-  const LanguageSwitchButton({super.key, this.onBeforeSwitch});
+  const LanguageSwitchButton({
+    super.key,
+    this.onBeforeSwitch,
+    this.compact = false,
+  });
 
   final VoidCallback? onBeforeSwitch;
+  final bool compact;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -26,7 +31,7 @@ class LanguageSwitchButton extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     final theme = Theme.of(context);
 
-    final minSide = math.max(48.0, tokens.minTouchTarget);
+    final minSide = compact ? 48.0 : math.max(48.0, tokens.minTouchTarget);
     final isKk = profile.localeCode == 'kk';
 
     return OutlinedButton(
@@ -42,8 +47,8 @@ class LanguageSwitchButton extends ConsumerWidget {
       style: OutlinedButton.styleFrom(
         minimumSize: Size(minSide, minSide),
         padding: EdgeInsets.symmetric(
-          horizontal: tokens.spacingUnit * 1.5,
-          vertical: tokens.spacingUnit,
+          horizontal: compact ? 10 : tokens.spacingUnit * 1.5,
+          vertical: compact ? 8 : tokens.spacingUnit,
         ),
         side: BorderSide(
           color: profile.isHighContrast ? scheme.outline : scheme.primary,
@@ -111,6 +116,7 @@ class VoiceGuideHeader extends ConsumerWidget {
     super.key,
     required this.promptText,
     this.alwaysShow = false,
+    this.showLanguageSwitch = true,
     this.onLanguageSwitched,
   });
 
@@ -120,6 +126,11 @@ class VoiceGuideHeader extends ConsumerWidget {
   /// Displays the header even if `voiceAssistantEnabled == false`
   /// (used on the Calibration flow).
   final bool alwaysShow;
+
+  /// Whether to include the inline `РУС / ҚАЗ` switcher inside the header.
+  /// Pass `false` on screens that already render a persistent language toggle
+  /// in the top bar (e.g. [HomeScreen]).
+  final bool showLanguageSwitch;
 
   final VoidCallback? onLanguageSwitched;
 
@@ -140,6 +151,7 @@ class VoiceGuideHeader extends ConsumerWidget {
         MediaQuery.accessibleNavigationOf(context);
 
     if (talkBackActive) {
+      if (!showLanguageSwitch) return const SizedBox.shrink();
       return Align(
         alignment: Alignment.centerLeft,
         child: LanguageSwitchButton(onBeforeSwitch: onLanguageSwitched),
@@ -169,7 +181,9 @@ class VoiceGuideHeader extends ConsumerWidget {
         child: Wrap(
           spacing: tokens.spacingUnit * 1.5,
           runSpacing: tokens.spacingUnit,
-          alignment: WrapAlignment.spaceBetween,
+          alignment: showLanguageSwitch
+              ? WrapAlignment.spaceBetween
+              : WrapAlignment.start,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             ElevatedButton.icon(
@@ -198,7 +212,8 @@ class VoiceGuideHeader extends ConsumerWidget {
                 ),
               ),
             ),
-            LanguageSwitchButton(onBeforeSwitch: onLanguageSwitched),
+            if (showLanguageSwitch)
+              LanguageSwitchButton(onBeforeSwitch: onLanguageSwitched),
           ],
         ),
       ),

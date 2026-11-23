@@ -8,7 +8,9 @@ import '../../core/theme/adaptive_tokens.dart';
 /// Accessible BCC Bank brand badge that adapts cleanly to high-contrast modes
 /// and scales up to 200% without clipping.
 class BccLogo extends ConsumerWidget {
-  const BccLogo({super.key});
+  const BccLogo({super.key, this.compact = false});
+
+  final bool compact;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -18,7 +20,9 @@ class BccLogo extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     final theme = Theme.of(context);
 
-    final badgeSize = 44.0 + (profile.textScaleFactor - 1) * 10;
+    final badgeSize = compact
+        ? 38.0
+        : 44.0 + (profile.textScaleFactor - 1) * 10;
 
     return Semantics(
       label: '${strings.bankName} — ${strings.appTitle}',
@@ -32,7 +36,7 @@ class BccLogo extends ConsumerWidget {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: scheme.primary,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(compact ? 10 : 12),
               border: profile.isHighContrast
                   ? Border.all(
                       color: scheme.outline,
@@ -47,7 +51,7 @@ class BccLogo extends ConsumerWidget {
               semanticLabel: '',
             ),
           ),
-          SizedBox(width: tokens.spacingUnit * 1.25),
+          SizedBox(width: compact ? 8 : tokens.spacingUnit * 1.25),
           Flexible(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -55,10 +59,13 @@ class BccLogo extends ConsumerWidget {
               children: [
                 Text(
                   strings.appTitle,
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: scheme.onSurface,
-                  ),
+                  style: (compact
+                          ? theme.textTheme.titleMedium
+                          : theme.textTheme.titleLarge)
+                      ?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: scheme.onSurface,
+                      ),
                   softWrap: true,
                 ),
                 Text(

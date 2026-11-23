@@ -46,21 +46,34 @@ class TransferScreen extends ConsumerStatefulWidget {
 class _TransferScreenState extends ConsumerState<TransferScreen> {
   final _phoneController = TextEditingController();
   final _amountController = TextEditingController();
+  final _phoneFocusNode = FocusNode();
+  final _amountFocusNode = FocusNode();
   final _draftKey = GlobalKey();
+  final _phoneFieldKey = GlobalKey();
+  final _amountFieldKey = GlobalKey();
 
   QuickContact? _selectedContact;
-  String? _formError;
+  String? _phoneError;
+  String? _amountError;
   String? _voiceBannerMessage;
+  String? _voiceInfoMessage;
+  bool _voiceHasError = false;
+  VoiceTransferIntent? _pendingPartialIntent;
+  String? _earlyReleaseHint;
 
   // Anti-fraud 5-second cooling-off state
   Timer? _coolingTimer;
   int _coolingSecondsRemaining = 0;
-  ({String phone, double amount})? _lastCoolingDraft;
+  bool _coolingCompleted = false;
+  ({String phone, int amountTiyn})? _lastCoolingDraft;
 
   // Receipt state after transfer execution
   _TransferReceipt? _receipt;
   bool _awaitingAccessibleConfirmation = false;
   late final VoiceAccessibilityService _voiceService;
+
+  bool get _isUtilityPayment =>
+      widget.initialContact?.category == QuickContactCategory.utilities;
 
   @override
   void initState() {
@@ -68,9 +81,14 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
     _voiceService = ref.read(voiceAccessibilityServiceProvider);
     _selectedContact = widget.initialContact;
     if (_selectedContact?.defaultAmountTenge != null) {
-      _amountController.text = _selectedContact!.defaultAmountTenge!
-          .round()
-          .toString();
+      _amountController.text = _formatInputAmount(
+        _selectedContact!.defaultAmountTenge!,
+      );
+    }
+    if (widget.initialContact != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollToDraft();
+      });
     }
   }
 
@@ -81,14 +99,24 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
     _voiceService.stopAll();
     _phoneController.dispose();
     _amountController.dispose();
+    _phoneFocusNode.dispose();
+    _amountFocusNode.dispose();
     super.dispose();
+  }
+
+  String _formatInputAmount(double value) {
+    final normalized = MoneyFormatter.normalizeAmount(value);
+    if (!MoneyFormatter.hasTiyn(normalized)) {
+      return normalized.round().toString();
+    }
+    return normalized.toStringAsFixed(2).replaceAll('.', ',');
   }
 
   double get _parsedAmount {
     final cleaned = _amountController.text
-        .replaceAll(RegExp(r'[\s\u00A0]'), '')
+        .replaceAll(RegExp(r'[\s\u00A0\u202F]'), '')
         .replaceAll(',', '.');
-    return double.tryParse(cleaned) ?? 0;
+    return MoneyFormatter.normalizeAmount(double.tryParse(cleaned) ?? 0);
   }
 
   bool _isStrangerRecipient(MockBankRepository bankRepo) {
@@ -103,12 +131,21 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
   (String?, String?, double) get _draft =>
       (_selectedContact?.id, _normalizedPhone, _parsedAmount);
 
+  bool _isCompactStandard(AccessibilityProfile profile) =>
+      !profile.isSimplifiedUi &&
+      profile.textScaleFactor < 1.4 &&
+      !profile.voiceAssistantEnabled;
+
   bool _requiresAntiFraudCooling(
     AccessibilityProfile profile,
     MockBankRepository bankRepo,
   ) {
-    if (_parsedAmount <= 0 || !_isStrangerRecipient(bankRepo)) return false;
-    return profile.isSimplifiedUi || _parsedAmount >= 50000;
+    final amountTiyn = MoneyFormatter.toTiyn(_parsedAmount);
+    if (amountTiyn <= 0 || !_isStrangerRecipient(bankRepo)) return false;
+    if (profile.isSimplifiedUi) return true;
+    // Standard / fullBanking enforces the 5s block only on large transfers
+    // (>= 150 000 ₸) while keeping a non-blocking warning below that threshold.
+    return amountTiyn >= 15000000;
   }
 
   void _reevaluateAntiFraud() {
@@ -121,15 +158,20 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
       _coolingTimer = null;
       _lastCoolingDraft = null;
       _coolingSecondsRemaining = 0;
+      _coolingCompleted = false;
       return;
     }
 
-    final draft = (phone: _normalizedPhone!, amount: _parsedAmount);
+    final draft = (
+      phone: _normalizedPhone!,
+      amountTiyn: MoneyFormatter.toTiyn(_parsedAmount),
+    );
     if (_lastCoolingDraft == draft) return;
     _lastCoolingDraft = draft;
 
     _coolingTimer?.cancel();
     _coolingSecondsRemaining = 5;
+    _coolingCompleted = false;
     _coolingTimer = Timer.periodic(widget.coolingOffTickDuration, (timer) {
       if (!mounted) {
         timer.cancel();
@@ -137,7 +179,10 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
       }
       if (_coolingSecondsRemaining <= 1) {
         timer.cancel();
-        setState(() => _coolingSecondsRemaining = 0);
+        setState(() {
+          _coolingSecondsRemaining = 0;
+          _coolingCompleted = true;
+        });
       } else {
         setState(() => _coolingSecondsRemaining -= 1);
       }
@@ -148,12 +193,18 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
     setState(() {
       _selectedContact = contact;
       _phoneController.clear();
-      _formError = null;
+      _phoneError = null;
+      _amountError = null;
+      _earlyReleaseHint = null;
       _voiceBannerMessage = null;
+      _voiceInfoMessage = null;
+      _pendingPartialIntent = null;
       if (contact.category == QuickContactCategory.utilities &&
           _amountController.text.trim().isEmpty &&
           contact.defaultAmountTenge != null) {
-        _amountController.text = contact.defaultAmountTenge!.round().toString();
+        _amountController.text = _formatInputAmount(
+          contact.defaultAmountTenge!,
+        );
       }
       _reevaluateAntiFraud();
     });
@@ -161,10 +212,11 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
   }
 
   void _addAmount(int delta) {
-    final next = _parsedAmount + delta;
+    final next = MoneyFormatter.normalizeAmount(_parsedAmount + delta);
     setState(() {
-      _amountController.text = next.toStringAsFixed(next % 1 == 0 ? 0 : 2);
-      _formError = null;
+      _amountController.text = _formatInputAmount(next);
+      _amountError = null;
+      _earlyReleaseHint = null;
       _voiceBannerMessage = null;
       _reevaluateAntiFraud();
     });
@@ -177,12 +229,15 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
 
     String recipientDisplay = '';
     setState(() {
-      _formError = null;
+      _phoneError = null;
+      _amountError = null;
+      _earlyReleaseHint = null;
       _voiceBannerMessage = null;
+      _voiceInfoMessage = null;
+      _voiceHasError = false;
+      _pendingPartialIntent = null;
       if (intent.amount != null && intent.amount! > 0) {
-        _amountController.text = intent.amount! % 1 == 0
-            ? intent.amount!.round().toString()
-            : intent.amount!.toStringAsFixed(2);
+        _amountController.text = _formatInputAmount(intent.amount!);
       }
 
       final matched = bankRepo.findContact(
@@ -223,12 +278,154 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
     }
   }
 
-  void _scrollToDraft() {
+  void _applyPartialVoiceIntent(VoiceTransferIntent intent) {
+    final bankRepo = ref.read(mockBankRepositoryProvider.notifier);
+    setState(() {
+      _phoneError = null;
+      _amountError = null;
+      _earlyReleaseHint = null;
+      _voiceInfoMessage = null;
+      _voiceHasError = false;
+      _pendingPartialIntent = null;
+
+      if (intent.hasAmount && intent.amount != null) {
+        _amountController.text = _formatInputAmount(intent.amount!);
+      }
+      if (intent.hasRecipient) {
+        final matched = bankRepo.findContact(
+          intent.normalizedPhone ?? intent.recipientQuery,
+        );
+        if (matched != null) {
+          _selectedContact = matched;
+          _phoneController.clear();
+        } else if (intent.recipientQuery != null &&
+            intent.recipientQuery!.trim().isNotEmpty) {
+          _selectedContact = null;
+          _phoneController.text = intent.recipientQuery!.trim();
+        }
+      }
+      _reevaluateAntiFraud();
+    });
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final draftContext = _draftKey.currentContext;
-      if (draftContext != null && draftContext.mounted) {
+      if (!mounted) return;
+      if (!intent.hasRecipient) {
+        _scrollToKey(_phoneFieldKey);
+        _phoneFocusNode.requestFocus();
+      } else if (!intent.hasAmount) {
+        _scrollToKey(_amountFieldKey);
+        _amountFocusNode.requestFocus();
+      }
+    });
+  }
+
+  void _handleVoiceSessionUpdate(
+    VoiceSessionState? prev,
+    VoiceSessionState next,
+  ) {
+    final profile = ref.read(currentAccessibilityProfileProvider);
+    final strings = ref.read(appStringsProvider);
+    final bankRepo = ref.read(mockBankRepositoryProvider.notifier);
+
+    if (next.status != prev?.status) {
+      if (next.status == VoiceListeningStatus.permissionDenied) {
+        setState(() {
+          _voiceHasError = true;
+          _pendingPartialIntent = null;
+          _voiceInfoMessage = strings.micPermissionBlockedTransferNotice;
+        });
+        return;
+      }
+      if (next.status == VoiceListeningStatus.unavailable ||
+          next.status == VoiceListeningStatus.error) {
+        setState(() {
+          _voiceHasError = true;
+          _pendingPartialIntent = null;
+          _voiceInfoMessage = strings.micUnavailableDemoHint;
+        });
+        return;
+      }
+    }
+
+    final resultChanged =
+        next.parsedIntent != prev?.parsedIntent ||
+        next.recognizedText != prev?.recognizedText ||
+        next.isFinalResult != prev?.isFinalResult;
+    if (!resultChanged ||
+        !next.isFinalResult ||
+        next.status != VoiceListeningStatus.completed) {
+      return;
+    }
+
+    final intent = next.parsedIntent;
+    final matchedContact = intent == null
+        ? null
+        : bankRepo.findContact(intent.normalizedPhone ?? intent.recipientQuery);
+    final hasValidRecipient =
+        intent != null &&
+        (intent.normalizedPhone != null || matchedContact != null);
+    final hasAmount = intent != null && intent.hasAmount;
+
+    if (!hasAmount && !hasValidRecipient) {
+      final heard = next.recognizedText.trim();
+      final msg = heard.isNotEmpty
+          ? '${strings.voiceRecognizedPrefix} «$heard». ${strings.voiceNotUnderstoodNotice}'
+          : strings.voiceNotUnderstoodNotice;
+      setState(() {
+        _voiceHasError = true;
+        _pendingPartialIntent = null;
+        _voiceBannerMessage = null;
+        _voiceInfoMessage = msg;
+      });
+      if (profile.voiceAssistantEnabled) {
+        ref.read(voiceSessionProvider.notifier).speak(msg, context: context);
+      }
+      return;
+    }
+
+    if (hasAmount && hasValidRecipient) {
+      _applyVoiceIntent(intent);
+      return;
+    }
+
+    // Partial recognition: do not silently overwrite or mix old/new values;
+    // display what was heard and ask the user to Apply or Retry.
+    final heard = intent.rawText.trim();
+    final String detail;
+    if (hasAmount && intent.amount != null) {
+      final formatted =
+          intent.amountFormatted ??
+          MoneyFormatter.format(intent.amount!, localeCode: profile.localeCode);
+      detail = strings.voicePartialAmountOnlyTemplate(formatted);
+    } else {
+      final recipientLabel =
+          matchedContact?.localizedTitle(profile.localeCode) ??
+          (intent.normalizedPhone != null
+              ? VoiceTransferParser.formatPhone(intent.normalizedPhone!)
+              : intent.recipientQuery ?? '');
+      detail = strings.voicePartialRecipientOnlyTemplate(recipientLabel);
+    }
+    final msg = heard.isNotEmpty
+        ? '${strings.voiceRecognizedPrefix} «$heard». $detail'
+        : detail;
+
+    setState(() {
+      _voiceHasError = false;
+      _pendingPartialIntent = intent;
+      _voiceBannerMessage = null;
+      _voiceInfoMessage = msg;
+    });
+    if (profile.voiceAssistantEnabled) {
+      ref.read(voiceSessionProvider.notifier).speak(msg, context: context);
+    }
+  }
+
+  void _scrollToKey(GlobalKey key) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = key.currentContext;
+      if (target != null && target.mounted) {
         Scrollable.ensureVisible(
-          draftContext,
+          target,
           duration: const Duration(milliseconds: 350),
           curve: Curves.easeOutCubic,
         );
@@ -236,9 +433,16 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
     });
   }
 
+  void _scrollToDraft() => _scrollToKey(_draftKey);
+
   Future<void> _onMicButtonPressed() async {
     final session = ref.read(voiceSessionProvider);
     final notifier = ref.read(voiceSessionProvider.notifier);
+    setState(() {
+      _voiceInfoMessage = null;
+      _voiceHasError = false;
+      _pendingPartialIntent = null;
+    });
     if (session.isListening) {
       await notifier.stopPushToTalk();
       return;
@@ -246,29 +450,90 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
     await notifier.startPushToTalk();
   }
 
-  Future<void> _executeTransfer() async {
-    if (_receipt != null || _coolingSecondsRemaining > 0) return;
+  bool _validateDraft() {
     final profile = ref.read(currentAccessibilityProfileProvider);
     final strings = ref.read(appStringsProvider);
     final bankState = ref.read(mockBankRepositoryProvider);
     final bankNotifier = ref.read(mockBankRepositoryProvider.notifier);
 
-    final amount = _parsedAmount;
-    if (amount <= 0) {
-      setState(() => _formError = strings.invalidAmountError);
-      return;
-    }
-    if (amount > bankState.primaryAccount.balanceTenge) {
-      setState(() => _formError = strings.insufficientFundsError);
-      return;
-    }
-
     final phone = _normalizedPhone;
     final contact = _selectedContact ?? bankNotifier.findContact(phone);
     if (contact == null && phone == null) {
-      setState(() => _formError = strings.invalidRecipientError);
-      return;
+      setState(() {
+        _phoneError = strings.invalidRecipientError;
+        _amountError = null;
+        _earlyReleaseHint = null;
+      });
+      _scrollToKey(_phoneFieldKey);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _phoneFocusNode.requestFocus();
+      });
+      if (profile.voiceAssistantEnabled) {
+        ref
+            .read(voiceSessionProvider.notifier)
+            .speak(strings.invalidRecipientError, context: context);
+      }
+      return false;
     }
+
+    final amount = _parsedAmount;
+    final amountTiyn = MoneyFormatter.toTiyn(amount);
+    if (amountTiyn <= 0) {
+      setState(() {
+        _amountError = strings.invalidAmountError;
+        _phoneError = null;
+        _earlyReleaseHint = null;
+      });
+      _scrollToKey(_amountFieldKey);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _amountFocusNode.requestFocus();
+      });
+      if (profile.voiceAssistantEnabled) {
+        ref
+            .read(voiceSessionProvider.notifier)
+            .speak(strings.invalidAmountError, context: context);
+      }
+      return false;
+    }
+
+    final balanceTiyn = MoneyFormatter.toTiyn(
+      bankState.primaryAccount.balanceTenge,
+    );
+    if (amountTiyn > balanceTiyn) {
+      final availableStr = MoneyFormatter.format(
+        bankState.primaryAccount.balanceTenge,
+        localeCode: profile.localeCode,
+      );
+      final err = strings.insufficientFundsWithBalanceTemplate(availableStr);
+      setState(() {
+        _amountError = err;
+        _phoneError = null;
+        _earlyReleaseHint = null;
+      });
+      _scrollToKey(_amountFieldKey);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _amountFocusNode.requestFocus();
+      });
+      if (profile.voiceAssistantEnabled) {
+        ref.read(voiceSessionProvider.notifier).speak(err, context: context);
+      }
+      return false;
+    }
+
+    return true;
+  }
+
+  Future<void> _executeTransfer() async {
+    if (_receipt != null || _coolingSecondsRemaining > 0) return;
+    if (!_validateDraft()) return;
+
+    final profile = ref.read(currentAccessibilityProfileProvider);
+    final strings = ref.read(appStringsProvider);
+    final bankNotifier = ref.read(mockBankRepositoryProvider.notifier);
+
+    final amount = _parsedAmount;
+    final phone = _normalizedPhone;
+    final contact = _selectedContact ?? bankNotifier.findContact(phone);
 
     final rawPhone = phone == null
         ? ''
@@ -284,7 +549,15 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
           : '$rawPhone • #bcc карта',
     );
     if (!ok) {
-      setState(() => _formError = strings.insufficientFundsError);
+      final availableStr = MoneyFormatter.format(
+        ref.read(mockBankRepositoryProvider).primaryAccount.balanceTenge,
+        localeCode: profile.localeCode,
+      );
+      setState(
+        () => _amountError = strings.insufficientFundsWithBalanceTemplate(
+          availableStr,
+        ),
+      );
       return;
     }
 
@@ -296,7 +569,9 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
         contact?.localizedTitle(profile.localeCode) ?? rawPhone;
 
     setState(() {
-      _formError = null;
+      _phoneError = null;
+      _amountError = null;
+      _earlyReleaseHint = null;
       _receipt = _TransferReceipt(
         amountTenge: amount,
         recipientName: recipientDisplay,
@@ -309,16 +584,39 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
         .speak(strings.transferSuccessTitle, context: context);
   }
 
+  Future<void> _confirmWithCodeDialog() async {
+    if (_coolingSecondsRemaining > 0) return;
+    if (!_validateDraft()) return;
+    final strings = ref.read(appStringsProvider);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        scrollable: true,
+        title: Text(strings.confirmCodeDialogTitle),
+        content: Text(strings.confirmCodeDialogDemoHint),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(strings.backButton),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(strings.confirmWithCodeAction),
+          ),
+        ],
+      ),
+    );
+    if (mounted && confirmed == true) {
+      await _executeTransfer();
+    }
+  }
+
   Future<void> _confirmWithAssistiveInput() async {
     if (_awaitingAccessibleConfirmation || _coolingSecondsRemaining > 0) return;
+    if (!_validateDraft()) return;
     final draft = _draft;
     final profile = ref.read(currentAccessibilityProfileProvider);
     final strings = ref.read(appStringsProvider);
-    if (_parsedAmount <= 0 ||
-        (_selectedContact == null && _normalizedPhone == null)) {
-      await _executeTransfer();
-      return;
-    }
 
     final ready = Future<void>.delayed(profile.holdToConfirmDuration);
     final recipient =
@@ -373,17 +671,16 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
 
-    ref.listen<VoiceSessionState>(voiceSessionProvider, (prev, next) {
-      if (next.parsedIntent != null &&
-          next.isFinalResult &&
-          next.parsedIntent != prev?.parsedIntent) {
-        _applyVoiceIntent(next.parsedIntent!);
-      }
-    });
+    ref.listen<VoiceSessionState>(voiceSessionProvider, _handleVoiceSessionUpdate);
+
+    final screenTitle = _isUtilityPayment
+        ? strings.actionPayments
+        : strings.transferScreenTitle;
 
     if (_receipt != null) {
       return _TransferSuccessView(
         receipt: _receipt!,
+        screenTitle: screenTitle,
         profile: profile,
         strings: strings,
         onDone: () {
@@ -394,7 +691,12 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
       );
     }
 
+    final isCompactStandard = _isCompactStandard(profile);
     final showAntiFraud = _requiresAntiFraudCooling(profile, bankNotifier);
+    final showSoftStrangerWarning =
+        !showAntiFraud &&
+        _isStrangerRecipient(bankNotifier) &&
+        MoneyFormatter.toTiyn(_parsedAmount) > 0;
     final amount = _parsedAmount;
     final amountWords = amount > 0
         ? AmountInWords.format(amount, localeCode: profile.localeCode)
@@ -407,6 +709,12 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
         bankNotifier.findContact(phone)?.localizedTitle(profile.localeCode) ??
         (phone == null ? null : VoiceTransferParser.formatPhone(phone));
 
+    final availableBalance = bankState.primaryAccount.balanceTenge;
+    final availableTiyn = MoneyFormatter.toTiyn(availableBalance);
+    final amountTiyn = MoneyFormatter.toTiyn(amount);
+    final hasValidRemaining = amountTiyn > 0 && amountTiyn <= availableTiyn;
+    final remainingBalance = (availableTiyn - amountTiyn) / 100.0;
+
     final micPreparing =
         voiceSession.status == VoiceListeningStatus.initializing;
     final micUnavailable =
@@ -415,13 +723,24 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
         voiceSession.status == VoiceListeningStatus.error;
 
     return Scaffold(
-      appBar: AppBar(title: Text(strings.transferScreenTitle, softWrap: true)),
+      appBar: AppBar(title: Text(screenTitle, softWrap: true)),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: EdgeInsets.all(tokens.spacingUnit * 2),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (!isCompactStandard) ...[
+                Text(
+                  strings.transferStepRecipient,
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: tokens.accentText,
+                  ),
+                  softWrap: true,
+                ),
+                SizedBox(height: tokens.spacingUnit * 0.5),
+              ],
               Text(
                 strings.trustedContactsLabel,
                 style: theme.textTheme.titleMedium?.copyWith(
@@ -437,6 +756,7 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                     : null,
                 borderColor: voiceSession.isListening ? scheme.primary : null,
                 child: ExpansionTile(
+                  initiallyExpanded: false,
                   title: Text(strings.voiceTransferOptions),
                   leading: Icon(
                     Icons.mic_none_rounded,
@@ -473,7 +793,7 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                               : Icons.mic_rounded,
                           onPressed: micPreparing ? null : _onMicButtonPressed,
                         ),
-                        if (micUnavailable) ...[
+                        if (micUnavailable && _voiceInfoMessage == null) ...[
                           SizedBox(height: tokens.spacingUnit * 1.25),
                           Text(
                             strings.micUnavailableDemoHint,
@@ -482,6 +802,80 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                               fontWeight: FontWeight.w600,
                             ),
                             softWrap: true,
+                          ),
+                        ],
+                        if (_voiceInfoMessage != null) ...[
+                          SizedBox(height: tokens.spacingUnit * 1.5),
+                          Semantics(
+                            liveRegion: true,
+                            child: AdaptiveCard(
+                              borderColor: _voiceHasError
+                                  ? tokens.warning
+                                  : scheme.primary,
+                              backgroundColor: scheme.surfaceContainerHighest,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      ExcludeSemantics(
+                                        child: Icon(
+                                          _voiceHasError
+                                              ? Icons.warning_amber_rounded
+                                              : Icons.info_outline_rounded,
+                                          color: _voiceHasError
+                                              ? tokens.warning
+                                              : tokens.accentText,
+                                          size: tokens.iconSize,
+                                        ),
+                                      ),
+                                      SizedBox(width: tokens.spacingUnit),
+                                      Expanded(
+                                        child: Text(
+                                          _voiceInfoMessage!,
+                                          style: theme.textTheme.bodyMedium
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                          softWrap: true,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  SizedBox(height: tokens.spacingUnit * 1.25),
+                                  Wrap(
+                                    spacing: tokens.spacingUnit,
+                                    runSpacing: tokens.spacingUnit,
+                                    children: [
+                                      if (_pendingPartialIntent != null)
+                                        AdaptiveActionButton(
+                                          label: strings.applyButton,
+                                          icon: Icons.check_rounded,
+                                          expandWidth: false,
+                                          applyTremorSpacing: false,
+                                          onPressed: () =>
+                                              _applyPartialVoiceIntent(
+                                                _pendingPartialIntent!,
+                                              ),
+                                        ),
+                                      AdaptiveActionButton(
+                                        label: strings.retryVoiceButton,
+                                        icon: Icons.mic_rounded,
+                                        variant:
+                                            AdaptiveButtonVariant.outlined,
+                                        expandWidth: false,
+                                        applyTremorSpacing: false,
+                                        onPressed: micPreparing
+                                            ? null
+                                            : _onMicButtonPressed,
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ],
                         SizedBox(height: tokens.spacingUnit * 1.5),
@@ -527,59 +921,119 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
               ),
               SizedBox(height: tokens.spacingUnit * 2),
 
-              // 2. Trusted Contacts + Phone Input
-              ...bankState.quickContacts.map((contact) {
-                final selected = _selectedContact?.id == contact.id;
-                final contactTitle = contact.localizedTitle(profile.localeCode);
-                return Padding(
-                  padding: EdgeInsets.only(bottom: tokens.spacingUnit),
-                  child: AdaptiveCard(
-                    selected: selected,
-                    semanticLabel: '$contactTitle, ${contact.phoneOrAccount}',
-                    onTap: () => _selectQuickContact(contact),
-                    child: Row(
-                      children: [
-                        ExcludeSemantics(
-                          child: Icon(
-                            selected
-                                ? Icons.check_circle_rounded
-                                : (contact.category ==
-                                          QuickContactCategory.utilities
-                                      ? Icons.receipt_long_rounded
-                                      : Icons.person_rounded),
-                            color: selected
-                                ? tokens.accentText
-                                : scheme.onSurfaceVariant,
-                            size: tokens.iconSize,
+              // 2. Trusted Contacts (Compact horizontal pills in standard vs vertical cards in adaptive)
+              if (isCompactStandard)
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: bankState.quickContacts.map((contact) {
+                      final selected = _selectedContact?.id == contact.id;
+                      final contactTitle = contact.localizedTitle(
+                        profile.localeCode,
+                      );
+                      return Padding(
+                        padding: EdgeInsets.only(right: tokens.spacingUnit),
+                        child: AdaptiveCard(
+                          selected: selected,
+                          semanticLabel:
+                              '$contactTitle, ${contact.phoneOrAccount}',
+                          padding: EdgeInsets.symmetric(
+                            horizontal: tokens.spacingUnit * 1.5,
+                            vertical: tokens.spacingUnit * 1.25,
                           ),
-                        ),
-                        SizedBox(width: tokens.spacingUnit * 1.5),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          onTap: () => _selectQuickContact(contact),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
+                              ExcludeSemantics(
+                                child: CircleAvatar(
+                                  radius: 16,
+                                  backgroundColor: selected
+                                      ? scheme.primary
+                                      : scheme.surfaceContainerHighest,
+                                  child: Icon(
+                                    selected
+                                        ? Icons.check_rounded
+                                        : (contact.category ==
+                                                  QuickContactCategory.utilities
+                                              ? Icons.receipt_long_rounded
+                                              : Icons.person_rounded),
+                                    size: 18,
+                                    color: selected
+                                        ? scheme.onPrimary
+                                        : tokens.accentText,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(width: tokens.spacingUnit),
                               Text(
                                 contactTitle,
-                                style: theme.textTheme.titleMedium?.copyWith(
+                                style: theme.textTheme.labelLarge?.copyWith(
                                   fontWeight: FontWeight.w700,
                                 ),
-                                softWrap: true,
-                              ),
-                              Text(
-                                contact.phoneOrAccount,
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                                softWrap: true,
                               ),
                             ],
                           ),
                         ),
-                      ],
-                    ),
+                      );
+                    }).toList(),
                   ),
-                );
-              }),
+                )
+              else
+                ...bankState.quickContacts.map((contact) {
+                  final selected = _selectedContact?.id == contact.id;
+                  final contactTitle = contact.localizedTitle(
+                    profile.localeCode,
+                  );
+                  return Padding(
+                    padding: EdgeInsets.only(bottom: tokens.spacingUnit),
+                    child: AdaptiveCard(
+                      selected: selected,
+                      semanticLabel: '$contactTitle, ${contact.phoneOrAccount}',
+                      onTap: () => _selectQuickContact(contact),
+                      child: Row(
+                        children: [
+                          ExcludeSemantics(
+                            child: Icon(
+                              selected
+                                  ? Icons.check_circle_rounded
+                                  : (contact.category ==
+                                            QuickContactCategory.utilities
+                                        ? Icons.receipt_long_rounded
+                                        : Icons.person_rounded),
+                              color: selected
+                                  ? tokens.accentText
+                                  : scheme.onSurfaceVariant,
+                              size: tokens.iconSize,
+                            ),
+                          ),
+                          SizedBox(width: tokens.spacingUnit * 1.5),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  contactTitle,
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                  softWrap: true,
+                                ),
+                                Text(
+                                  contact.phoneOrAccount,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                  softWrap: true,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
               SizedBox(height: tokens.spacingUnit * 1.5),
 
               AdaptiveCard(
@@ -587,6 +1041,50 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    if (_selectedContact?.category ==
+                        QuickContactCategory.utilities) ...[
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Container(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: tokens.spacingUnit * 1.5,
+                            vertical: tokens.spacingUnit * 0.6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: scheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: profile.isHighContrast
+                                  ? scheme.outline
+                                  : scheme.outlineVariant,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              ExcludeSemantics(
+                                child: Icon(
+                                  Icons.receipt_long_rounded,
+                                  size: tokens.iconSize * 0.85,
+                                  color: tokens.accentText,
+                                ),
+                              ),
+                              SizedBox(width: tokens.spacingUnit * 0.75),
+                              Flexible(
+                                child: Text(
+                                  strings.prefilledBillBadge,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                  softWrap: true,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: tokens.spacingUnit),
+                    ],
                     if (_voiceBannerMessage != null) ...[
                       Semantics(
                         liveRegion: true,
@@ -612,103 +1110,190 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                       ),
                       SizedBox(height: tokens.spacingUnit),
                     ],
-                    AdaptiveTextField(
-                      controller: _phoneController,
-                      label: selectedName == null
-                          ? strings.otherPhoneRecipientLabel
-                          : strings.differentPhoneRecipientLabel,
-                      hint: selectedName == null ? strings.phoneFieldHint : '',
-                      externalLabel: externalLabels,
-                      keyboardType: TextInputType.phone,
-                      prefixIcon: Icons.phone_rounded,
-                      inputFormatters: [
-                        FilteringTextInputFormatter.allow(
-                          RegExp(r'[0-9+ ()\u00A0\u202F-]'),
-                        ),
-                      ],
-                      onChanged: (value) {
-                        setState(() {
-                          if (value.trim().isNotEmpty) {
-                            _selectedContact = null;
-                          }
-                          _formError = null;
-                          _voiceBannerMessage = null;
-                          _reevaluateAntiFraud();
-                        });
-                      },
+                    KeyedSubtree(
+                      key: _phoneFieldKey,
+                      child: AdaptiveTextField(
+                        controller: _phoneController,
+                        focusNode: _phoneFocusNode,
+                        label: selectedName == null
+                            ? strings.otherPhoneRecipientLabel
+                            : strings.differentPhoneRecipientLabel,
+                        hint: selectedName == null ? strings.phoneFieldHint : '',
+                        errorText: _phoneError,
+                        externalLabel: externalLabels,
+                        keyboardType: TextInputType.phone,
+                        prefixIcon: Icons.phone_rounded,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(
+                            RegExp(r'[0-9+ ()\u00A0\u202F-]'),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setState(() {
+                            if (value.trim().isNotEmpty) {
+                              _selectedContact = null;
+                            }
+                            _phoneError = null;
+                            _amountError = null;
+                            _earlyReleaseHint = null;
+                            _voiceBannerMessage = null;
+                            _reevaluateAntiFraud();
+                          });
+                        },
+                      ),
                     ),
                     SizedBox(height: tokens.spacingUnit * 2),
 
-                    // Amount Input
-                    AdaptiveTextField(
-                      controller: _amountController,
-                      label: strings.amountFieldLabel,
-                      hint: '',
-                      externalLabel: externalLabels,
-                      suffixText: '₸',
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
+                    if (!isCompactStandard) ...[
+                      Text(
+                        strings.transferStepAmount,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: tokens.accentText,
+                        ),
+                        softWrap: true,
                       ),
-                      inputFormatters: [
-                        TextInputFormatter.withFunction((oldValue, newValue) {
-                          final ungrouped = newValue.text.replaceAll(
-                            RegExp(r'[\s\u00A0\u202F]'),
-                            '',
-                          );
-                          return RegExp(r'^\d{0,9}(?:[.,]\d{0,2})?$')
-                                  .hasMatch(ungrouped)
-                              ? newValue
-                              : oldValue;
-                        }),
-                      ],
-                      onChanged: (_) => setState(() {
-                        _formError = null;
-                        _voiceBannerMessage = null;
-                        _reevaluateAntiFraud();
-                      }),
+                      SizedBox(height: tokens.spacingUnit),
+                    ],
+
+                    // Live available balance strip
+                    Container(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: tokens.spacingUnit * 1.5,
+                        vertical: tokens.spacingUnit,
+                      ),
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: profile.isHighContrast
+                              ? scheme.outline
+                              : scheme.outlineVariant,
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${strings.availableOnCardLabel} '
+                            '${MoneyFormatter.format(availableBalance, localeCode: profile.localeCode)}',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                            softWrap: true,
+                          ),
+                          if (hasValidRemaining) ...[
+                            SizedBox(height: tokens.spacingUnit * 0.4),
+                            Text(
+                              '${strings.balanceAfterTransferLabel} '
+                              '${MoneyFormatter.format(remainingBalance, localeCode: profile.localeCode)}',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: tokens.accentText,
+                                fontWeight: FontWeight.w700,
+                              ),
+                              softWrap: true,
+                            ),
+                          ],
+                        ],
+                      ),
                     ),
-                    // 3. Amount in words readout (anti-extra-zero guard)
+                    SizedBox(height: tokens.spacingUnit * 1.25),
+
+                    // Amount Input
+                    KeyedSubtree(
+                      key: _amountFieldKey,
+                      child: AdaptiveTextField(
+                        controller: _amountController,
+                        focusNode: _amountFocusNode,
+                        label: strings.amountFieldLabel,
+                        hint: '',
+                        errorText: _amountError,
+                        externalLabel: externalLabels,
+                        suffixText: '₸',
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: [
+                          TextInputFormatter.withFunction((oldValue, newValue) {
+                            final ungrouped = newValue.text.replaceAll(
+                              RegExp(r'[\s\u00A0\u202F]'),
+                              '',
+                            );
+                            return RegExp(r'^\d{0,9}(?:[.,]\d{0,2})?$')
+                                    .hasMatch(ungrouped)
+                                ? newValue
+                                : oldValue;
+                          }),
+                        ],
+                        onChanged: (_) => setState(() {
+                          _amountError = null;
+                          _phoneError = null;
+                          _earlyReleaseHint = null;
+                          _voiceBannerMessage = null;
+                          _reevaluateAntiFraud();
+                        }),
+                      ),
+                    ),
+                    // 3. Amount in words readout (calm non-clickable info callout)
                     if (amountWords != null) ...[
                       SizedBox(height: tokens.spacingUnit * 1.25),
                       Semantics(
                         liveRegion: true,
                         label: '${strings.amountInWordsPrefix} $amountWords',
                         excludeSemantics: true,
-                        child: Container(
-                          padding: EdgeInsets.all(tokens.spacingUnit),
-                          decoration: BoxDecoration(
-                            color: scheme.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: profile.isHighContrast
-                                  ? scheme.outline
-                                  : scheme.primary,
-                              width: profile.isHighContrast
-                                  ? tokens.borderWidth
-                                  : 1.5,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Container(
+                            padding: EdgeInsets.all(tokens.spacingUnit * 1.25),
+                            decoration: BoxDecoration(
+                              color: scheme.surfaceContainerHighest,
+                              border: Border(
+                                left: BorderSide(
+                                  color: profile.isHighContrast
+                                      ? scheme.outline
+                                      : tokens.accentText,
+                                  width: 4,
+                                ),
+                              ),
                             ),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                strings.amountInWordsPrefix,
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  color: scheme.onSurfaceVariant,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                                softWrap: true,
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                amountWords,
-                                style: theme.textTheme.titleMedium?.copyWith(
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Icon(
+                                  Icons.spellcheck_rounded,
                                   color: tokens.accentText,
-                                  fontWeight: FontWeight.w800,
+                                  size: tokens.iconSize * 0.9,
                                 ),
-                                softWrap: true,
-                              ),
-                            ],
+                                SizedBox(width: tokens.spacingUnit),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        strings.amountInWordsPrefix,
+                                        style: theme.textTheme.bodyMedium
+                                            ?.copyWith(
+                                              color: scheme.onSurfaceVariant,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                        softWrap: true,
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        amountWords,
+                                        style: theme.textTheme.titleMedium
+                                            ?.copyWith(
+                                              color: tokens.accentText,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                        softWrap: true,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -743,8 +1328,8 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                 ),
               ),
 
-              // 4a. Anti-fraud warning + cooling-off countdown
-              if (showAntiFraud) ...[
+              // 4a. Anti-fraud warning + cooling-off countdown (or soft banner in standard < 150k)
+              if (showAntiFraud || showSoftStrangerWarning) ...[
                 SizedBox(height: tokens.spacingUnit * 2),
                 Semantics(
                   liveRegion: true,
@@ -758,13 +1343,26 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          strings.antiFraudStrangerTitle,
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            color: scheme.onSurface,
-                            fontWeight: FontWeight.w800,
-                          ),
-                          softWrap: true,
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              Icons.shield_outlined,
+                              color: tokens.warning,
+                              size: tokens.iconSize,
+                            ),
+                            SizedBox(width: tokens.spacingUnit),
+                            Expanded(
+                              child: Text(
+                                strings.antiFraudStrangerTitle,
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  color: scheme.onSurface,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                                softWrap: true,
+                              ),
+                            ),
+                          ],
                         ),
                         SizedBox(height: tokens.spacingUnit),
                         Text(
@@ -774,36 +1372,60 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                           ),
                           softWrap: true,
                         ),
+                        if (showAntiFraud &&
+                            _coolingSecondsRemaining == 0 &&
+                            _coolingCompleted) ...[
+                          SizedBox(height: tokens.spacingUnit * 1.25),
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.verified_user_rounded,
+                                color: tokens.success,
+                                size: tokens.iconSize * 0.9,
+                              ),
+                              SizedBox(width: tokens.spacingUnit * 0.75),
+                              Expanded(
+                                child: Text(
+                                  strings.antiFraudReadyToConfirm,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: tokens.success,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                  softWrap: true,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
                       ],
                     ),
                   ),
                 ),
-                SizedBox(height: tokens.spacingUnit),
-                AdaptiveActionButton(
-                  label: strings.cancelTransferButton,
-                  variant: AdaptiveButtonVariant.outlined,
-                  onPressed: () => Navigator.of(context).maybePop(),
-                ),
-              ],
-
-              if (_formError != null) ...[
-                SizedBox(height: tokens.spacingUnit * 1.5),
-                Semantics(
-                  liveRegion: true,
-                  child: Text(
-                    _formError!,
-                    style: theme.textTheme.bodyLarge?.copyWith(
-                      color: scheme.error,
-                      fontWeight: FontWeight.w700,
-                    ),
-                    softWrap: true,
+                if (showAntiFraud) ...[
+                  SizedBox(height: tokens.spacingUnit),
+                  AdaptiveActionButton(
+                    label: strings.cancelTransferButton,
+                    variant: AdaptiveButtonVariant.outlined,
+                    onPressed: () => Navigator.of(context).maybePop(),
                   ),
-                ),
+                ],
               ],
 
               SizedBox(height: tokens.spacingUnit * 2.5),
 
-              if (recipientName != null && amount > 0) ...[
+              if (!isCompactStandard) ...[
+                Text(
+                  strings.transferStepReview,
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: tokens.accentText,
+                  ),
+                  softWrap: true,
+                ),
+                SizedBox(height: tokens.spacingUnit),
+              ],
+
+              if (!isCompactStandard && recipientName != null && amount > 0) ...[
                 AdaptiveCard(
                   padding: EdgeInsets.all(tokens.spacingUnit * 1.5),
                   child: Column(
@@ -818,7 +1440,7 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                       SizedBox(height: tokens.spacingUnit * 0.5),
                       Text(
                         '${strings.transferReviewAmountLabel}: '
-                        '${MoneyFormatter.format(amount, localeCode: profile.localeCode, showTiyn: amount % 1 != 0)}',
+                        '${MoneyFormatter.format(amount, localeCode: profile.localeCode)}',
                         style: theme.textTheme.bodyLarge,
                       ),
                     ],
@@ -839,17 +1461,81 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                     onPressed: null,
                   ),
                 )
-              else if (profile.requiresHoldToConfirm)
+              else if (profile.requiresHoldToConfirm) ...[
                 _HoldToConfirmButton(
                   key: ValueKey(_draft),
                   idleLabel: strings.sendTransferButton,
                   instruction: strings.holdToConfirmHint,
                   activeLabel: strings.holdToConfirmActiveLabel,
                   duration: profile.holdToConfirmDuration,
+                  isHighContrast: profile.isHighContrast,
+                  onBeforeHoldStart: _validateDraft,
+                  onEarlyRelease: () {
+                    HapticFeedback.lightImpact();
+                    HapticFeedback.lightImpact();
+                    setState(() {
+                      _earlyReleaseHint = strings.holdReleasedTooEarlyHint;
+                    });
+                    if (profile.voiceAssistantEnabled) {
+                      ref
+                          .read(voiceSessionProvider.notifier)
+                          .speak(
+                            strings.holdReleasedTooEarlyHint,
+                            context: context,
+                          );
+                    }
+                  },
                   onConfirmed: _executeTransfer,
                   onAccessibleConfirm: _confirmWithAssistiveInput,
-                )
-              else
+                ),
+                if (_earlyReleaseHint != null) ...[
+                  SizedBox(height: tokens.spacingUnit),
+                  Semantics(
+                    liveRegion: true,
+                    child: Container(
+                      padding: EdgeInsets.all(tokens.spacingUnit * 1.25),
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: tokens.warning),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          ExcludeSemantics(
+                            child: Icon(
+                              Icons.touch_app_rounded,
+                              color: tokens.warning,
+                              size: tokens.iconSize,
+                            ),
+                          ),
+                          SizedBox(width: tokens.spacingUnit),
+                          Expanded(
+                            child: Text(
+                              _earlyReleaseHint!,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                              softWrap: true,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+                SizedBox(height: tokens.spacingUnit),
+                Center(
+                  child: TextButton.icon(
+                    onPressed: _confirmWithCodeDialog,
+                    icon: const Icon(Icons.password_rounded),
+                    label: Text(
+                      strings.confirmWithoutHoldButton,
+                      softWrap: true,
+                    ),
+                  ),
+                ),
+              ] else
                 AdaptiveActionButton(
                   label: strings.sendTransferButton,
                   icon: Icons.check_circle_rounded,
@@ -896,16 +1582,22 @@ class _HoldToConfirmButton extends StatefulWidget {
     required this.instruction,
     required this.activeLabel,
     required this.duration,
+    required this.isHighContrast,
     required this.onConfirmed,
     required this.onAccessibleConfirm,
+    this.onBeforeHoldStart,
+    this.onEarlyRelease,
   });
 
   final String idleLabel;
   final String instruction;
   final String activeLabel;
   final Duration duration;
+  final bool isHighContrast;
   final VoidCallback onConfirmed;
   final VoidCallback onAccessibleConfirm;
+  final bool Function()? onBeforeHoldStart;
+  final VoidCallback? onEarlyRelease;
 
   @override
   State<_HoldToConfirmButton> createState() => _HoldToConfirmButtonState();
@@ -919,6 +1611,7 @@ class _HoldToConfirmButtonState extends State<_HoldToConfirmButton>
   Offset? _downPosition;
   Duration? _holdStartedAt;
   bool _holding = false;
+  bool _completed = false;
   bool _showFocus = false;
 
   @override
@@ -941,9 +1634,13 @@ class _HoldToConfirmButtonState extends State<_HoldToConfirmButton>
 
   void _startHold(PointerDownEvent event) {
     if (_pointer != null || event.buttons != 1) return;
+    if (widget.onBeforeHoldStart != null && !widget.onBeforeHoldStart!()) {
+      return;
+    }
     _pointer = event.pointer;
     _downPosition = event.position;
     _holdStartedAt = event.timeStamp;
+    _completed = false;
     setState(() => _holding = true);
     HapticFeedback.mediumImpact();
     _controller.forward(from: 0);
@@ -951,7 +1648,8 @@ class _HoldToConfirmButtonState extends State<_HoldToConfirmButton>
   }
 
   void _finishHold() {
-    if (!_holding) return;
+    if (!_holding || _completed) return;
+    _completed = true;
     setState(() => _holding = false);
     HapticFeedback.heavyImpact();
     widget.onConfirmed();
@@ -962,18 +1660,24 @@ class _HoldToConfirmButtonState extends State<_HoldToConfirmButton>
     // A browser can defer the timer while still delivering the release event.
     if (event.timeStamp - _holdStartedAt! >= widget.duration) {
       _finishHold();
+      _cancelHold(notifyEarly: false);
+      return;
     }
-    _cancelHold();
+    _cancelHold(notifyEarly: true);
   }
 
-  void _cancelHold() {
+  void _cancelHold({bool notifyEarly = false}) {
     if (!mounted) return;
+    final wasHoldingBeforeDone = _holding && !_completed;
     _pointer = null;
     _downPosition = null;
     _holdStartedAt = null;
     _holdTimer?.cancel();
     if (_holding) setState(() => _holding = false);
     _controller.reset();
+    if (notifyEarly && wasHoldingBeforeDone) {
+      widget.onEarlyRelease?.call();
+    }
   }
 
   @override
@@ -1011,27 +1715,45 @@ class _HoldToConfirmButtonState extends State<_HoldToConfirmButton>
                   if (_pointer == e.pointer &&
                       _downPosition != null &&
                       (e.position - _downPosition!).distance > 28) {
-                    _cancelHold();
+                    _cancelHold(notifyEarly: true);
                   }
                 },
                 onPointerUp: _releaseHold,
                 onPointerCancel: (e) {
-                  if (_pointer == e.pointer) _cancelHold();
+                  if (_pointer == e.pointer) _cancelHold(notifyEarly: false);
                 },
                 child: Container(
                   constraints: const BoxConstraints(minHeight: 72),
                   decoration: BoxDecoration(
-                    color: scheme.primaryContainer,
+                    color: scheme.primary,
                     borderRadius: radius,
                     border: Border.all(
-                      color: _showFocus ? scheme.primary : scheme.outline,
-                      width: tokens.borderWidth.clamp(2.0, 4.0),
+                      color: _showFocus
+                          ? tokens.emphasis
+                          : (widget.isHighContrast
+                                ? scheme.outline
+                                : scheme.primary),
+                      width: _showFocus
+                          ? tokens.borderWidth.clamp(2.0, 4.0) + 1
+                          : (widget.isHighContrast ? tokens.borderWidth : 1.5),
                     ),
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
+                      Positioned.fill(
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: FractionallySizedBox(
+                            widthFactor: _controller.value.clamp(0.0, 1.0),
+                            heightFactor: 1.0,
+                            child: Container(
+                              color: scheme.onPrimary.withValues(alpha: 0.16),
+                            ),
+                          ),
+                        ),
+                      ),
                       Positioned(
                         left: 0,
                         right: 0,
@@ -1039,8 +1761,10 @@ class _HoldToConfirmButtonState extends State<_HoldToConfirmButton>
                         child: LinearProgressIndicator(
                           value: _controller.value,
                           minHeight: 8,
-                          color: scheme.primary,
-                          backgroundColor: scheme.primary.withValues(alpha: 0.18),
+                          color: scheme.onPrimary,
+                          backgroundColor: scheme.onPrimary.withValues(
+                            alpha: 0.25,
+                          ),
                         ),
                       ),
                       Padding(
@@ -1051,21 +1775,40 @@ class _HoldToConfirmButtonState extends State<_HoldToConfirmButton>
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text(
-                              widget.idleLabel,
-                              style: theme.textTheme.labelLarge?.copyWith(
-                                fontWeight: FontWeight.w800,
-                                color: scheme.onPrimaryContainer,
-                              ),
-                              textAlign: TextAlign.center,
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.touch_app_rounded,
+                                  color: scheme.onPrimary,
+                                  size: tokens.iconSize,
+                                ),
+                                SizedBox(width: tokens.spacingUnit),
+                                Flexible(
+                                  child: Text(
+                                    _holding
+                                        ? widget.activeLabel
+                                        : widget.idleLabel,
+                                    style: theme.textTheme.labelLarge?.copyWith(
+                                      fontWeight: FontWeight.w800,
+                                      color: scheme.onPrimary,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                    softWrap: true,
+                                  ),
+                                ),
+                              ],
                             ),
                             SizedBox(height: tokens.spacingUnit * 0.5),
                             Text(
                               widget.instruction,
                               style: theme.textTheme.bodyMedium?.copyWith(
-                                color: scheme.onPrimaryContainer,
+                                color: scheme.onPrimary,
+                                fontWeight: FontWeight.w600,
                               ),
                               textAlign: TextAlign.center,
+                              softWrap: true,
                             ),
                           ],
                         ),
@@ -1097,12 +1840,14 @@ class _TransferReceipt {
 class _TransferSuccessView extends StatelessWidget {
   const _TransferSuccessView({
     required this.receipt,
+    required this.screenTitle,
     required this.profile,
     required this.strings,
     required this.onDone,
   });
 
   final _TransferReceipt receipt;
+  final String screenTitle;
   final AccessibilityProfile profile;
   final AppStrings strings;
   final VoidCallback onDone;
@@ -1125,74 +1870,83 @@ class _TransferSuccessView extends StatelessWidget {
       localeCode: profile.localeCode,
     );
 
-    return Scaffold(
-      appBar: AppBar(title: Text(strings.transferScreenTitle, softWrap: true)),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: EdgeInsets.all(tokens.spacingUnit * 2),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              AdaptiveCard(
-                borderColor: tokens.success,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      Icons.check_circle_rounded,
-                      color: tokens.success,
-                      size: tokens.iconSize * 2,
-                    ),
-                    SizedBox(height: tokens.spacingUnit * 1.5),
-                    Text(
-                      strings.transferSuccessTitle,
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w800,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) onDone();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          automaticallyImplyLeading: false,
+          title: Text(screenTitle, softWrap: true),
+        ),
+        body: SafeArea(
+          child: SingleChildScrollView(
+            padding: EdgeInsets.all(tokens.spacingUnit * 2),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                AdaptiveCard(
+                  borderColor: tokens.success,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.check_circle_rounded,
+                        color: tokens.success,
+                        size: tokens.iconSize * 2,
                       ),
-                      softWrap: true,
-                    ),
-                    SizedBox(height: tokens.spacingUnit * 2),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        formattedAmount,
-                        style: theme.textTheme.displaySmall?.copyWith(
-                          color: tokens.accentText,
+                      SizedBox(height: tokens.spacingUnit * 1.5),
+                      Text(
+                        strings.transferSuccessTitle,
+                        style: theme.textTheme.headlineSmall?.copyWith(
                           fontWeight: FontWeight.w800,
                         ),
+                        softWrap: true,
                       ),
-                    ),
-                    SizedBox(height: tokens.spacingUnit * 0.5),
-                    Text(
-                      amountWords,
-                      style: theme.textTheme.bodyLarge,
-                      softWrap: true,
-                    ),
-                    SizedBox(height: tokens.spacingUnit * 1.5),
-                    Text(
-                      '${strings.recipientFieldLabel}: ${receipt.recipientName}',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
+                      SizedBox(height: tokens.spacingUnit * 2),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          formattedAmount,
+                          style: theme.textTheme.displaySmall?.copyWith(
+                            color: tokens.accentText,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
                       ),
-                      softWrap: true,
-                    ),
-                    SizedBox(height: tokens.spacingUnit),
-                    Text(
-                      '${strings.newBalanceLabel} $formattedNewBalance',
-                      style: theme.textTheme.bodyLarge,
-                      softWrap: true,
-                    ),
-                  ],
+                      SizedBox(height: tokens.spacingUnit * 0.5),
+                      Text(
+                        amountWords,
+                        style: theme.textTheme.bodyLarge,
+                        softWrap: true,
+                      ),
+                      SizedBox(height: tokens.spacingUnit * 1.5),
+                      Text(
+                        '${strings.recipientFieldLabel}: ${receipt.recipientName}',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                        softWrap: true,
+                      ),
+                      SizedBox(height: tokens.spacingUnit),
+                      Text(
+                        '${strings.newBalanceLabel} $formattedNewBalance',
+                        style: theme.textTheme.bodyLarge,
+                        softWrap: true,
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              SizedBox(height: tokens.spacingUnit * 3),
-              AdaptiveActionButton(
-                label: strings.backToHomeButton,
-                icon: Icons.home_rounded,
-                onPressed: onDone,
-              ),
-            ],
+                SizedBox(height: tokens.spacingUnit * 3),
+                AdaptiveActionButton(
+                  label: strings.backToHomeButton,
+                  icon: Icons.home_rounded,
+                  onPressed: onDone,
+                ),
+              ],
+            ),
           ),
         ),
       ),

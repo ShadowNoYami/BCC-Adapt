@@ -25,7 +25,10 @@ abstract final class AppRoutes {
         ),
       calibration => MaterialPageRoute<void>(
           settings: settings,
-          builder: (_) => const CalibrationScreen(),
+          builder: (_) => CalibrationScreen(
+            fromSettings:
+                settings.arguments is bool ? settings.arguments as bool : false,
+          ),
         ),
       registration => MaterialPageRoute<void>(
           settings: settings,

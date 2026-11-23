@@ -12,6 +12,8 @@ class AdaptiveTextField extends StatelessWidget {
     required this.hint,
     required this.externalLabel,
     required this.keyboardType,
+    this.focusNode,
+    this.errorText,
     this.prefixIcon,
     this.suffixText,
     this.inputFormatters = const [],
@@ -23,6 +25,8 @@ class AdaptiveTextField extends StatelessWidget {
   final String hint;
   final bool externalLabel;
   final TextInputType keyboardType;
+  final FocusNode? focusNode;
+  final String? errorText;
   final IconData? prefixIcon;
   final String? suffixText;
   final List<TextInputFormatter> inputFormatters;
@@ -31,9 +35,14 @@ class AdaptiveTextField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = AdaptiveTokens.of(context);
-    final textStyle = Theme.of(context).textTheme.titleMedium;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final textStyle = theme.textTheme.titleMedium;
+    final hasError = errorText != null && errorText!.trim().isNotEmpty;
+
     final field = TextField(
       controller: controller,
+      focusNode: focusNode,
       keyboardType: keyboardType,
       maxLines: externalLabel ? null : 1,
       textInputAction: TextInputAction.done,
@@ -51,22 +60,60 @@ class AdaptiveTextField extends StatelessWidget {
             ? null
             : Icon(prefixIcon, size: tokens.iconSize),
         suffixText: suffixText,
+        errorText: hasError ? '' : null,
+        errorStyle: hasError ? const TextStyle(fontSize: 0, height: 0.01) : null,
       ),
     );
 
-    if (!externalLabel) return field;
+    final Widget labeledField = !externalLabel
+        ? field
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ExcludeSemantics(
+                child: Text(
+                  label,
+                  style: textStyle?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              SizedBox(height: tokens.spacingUnit),
+              Semantics(label: label, child: field),
+            ],
+          );
+
+    if (!hasError) return labeledField;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ExcludeSemantics(
-          child: Text(
-            label,
-            style: textStyle?.copyWith(fontWeight: FontWeight.w700),
+        labeledField,
+        SizedBox(height: tokens.spacingUnit * 0.75),
+        Semantics(
+          liveRegion: true,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ExcludeSemantics(
+                child: Icon(
+                  Icons.error_outline_rounded,
+                  color: scheme.error,
+                  size: tokens.iconSize * 0.9,
+                ),
+              ),
+              SizedBox(width: tokens.spacingUnit * 0.75),
+              Expanded(
+                child: Text(
+                  errorText!,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: scheme.error,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  softWrap: true,
+                ),
+              ),
+            ],
           ),
         ),
-        SizedBox(height: tokens.spacingUnit),
-        Semantics(label: label, child: field),
       ],
     );
   }

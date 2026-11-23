@@ -3,8 +3,9 @@
 abstract final class AmountInWords {
   static String format(num amount, {String localeCode = 'ru'}) {
     final safe = amount.isFinite && amount >= 0 ? amount : 0;
-    final whole = safe.floor();
-    final tiyn = ((safe - whole) * 100).round();
+    final totalTiyn = (safe * 100).round();
+    final whole = totalTiyn ~/ 100;
+    final tiyn = totalTiyn % 100;
     final isKk = localeCode == 'kk';
 
     final words = isKk ? _kk(whole) : _ru(whole);

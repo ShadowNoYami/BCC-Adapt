@@ -33,8 +33,8 @@ class AppStrings {
       : 'Добро пожаловать!';
 
   String get welcomeSubtitle => isKk
-      ? 'Реттеуді бастау үшін жасыл батырманы басыңыз.'
-      : 'Нажмите зелёную кнопку, чтобы начать настройку.';
+      ? 'Реттеуді бастау үшін экранның жоғарғы жағындағы жасыл батырманы басыңыз.'
+      : 'Нажмите большую зелёную кнопку вверху экрана, чтобы начать настройку.';
 
   String get languageLabel => isKk ? 'Тіл / Язык' : 'Язык / Тіл';
   String get languageRu => 'Русский';
@@ -67,8 +67,8 @@ class AppStrings {
       : 'Продолжить без настройки';
 
   String get welcomeZeroTouchVoicePrompt => isKk
-      ? 'Сәлеметсіз бе! Бұл BCC банкі. Мәтін мен батырмаларды үлкейту үшін жасыл батырманы басыңыз.'
-      : 'Здравствуйте! Это банк BCC. Чтобы увеличить текст и кнопки, нажмите большую зелёную кнопку.';
+      ? 'Сәлеметсіз бе! Бұл BCC банкі. Мәтін мен батырмаларды үлкейту үшін экранның жоғарғы жағындағы үлкен жасыл батырманы басыңыз.'
+      : 'Здравствуйте! Это банк BCC. Чтобы увеличить текст и кнопки, нажмите большую зелёную кнопку вверху экрана.';
 
   String get welcomeSpeechUnavailable => isKk
       ? 'Кеңес экранда жазылған.'
@@ -126,6 +126,10 @@ class AppStrings {
   String get motorChoiceStandard =>
       isKk ? 'Әдеттегі батырмалар' : 'Обычные кнопки';
 
+  String get motorChoiceEnlarged => isKk
+      ? 'Ұстамай-ақ ірі батырмалар'
+      : 'Крупные кнопки без удержания';
+
   String get motorChoiceTremor => isKk
       ? 'Ірі батырмалар және қорғаныс'
       : 'Крупные кнопки с защитой';
@@ -137,6 +141,10 @@ class AppStrings {
   String get motorMissFeedback => isKk
       ? 'Ештеңе етпейді. Батырмаларды үлкейттік.'
       : 'Ничего страшного. Мы увеличили кнопки.';
+
+  String get motorHitAfterMissFeedback => isKk
+      ? 'Батырманы дәл бастыңыз. Бұрын мүлт кету болғандықтан, кездейсоқ басудан қорғаныс (ірі батырмалар және 1,5 сек ұстап растау) қауіпсіздік үшін қосулы қалады. Қаласаңыз, төменде ұстамай-ақ ірі батырмаларды таңдай аласыз.'
+      : 'Вы попали по кнопке. Так как ранее был промах, защита от случайных нажатий (крупные кнопки и подтверждение удержанием 1,5 сек) остаётся включённой для безопасности. Ниже можно выбрать просто крупные кнопки без удержания.';
 
   String get calibrationCognitiveTitle => isKk
       ? 'Басты бетте не болсын?'
@@ -176,6 +184,16 @@ class AppStrings {
   String get finishCalibrationButton => isKk
       ? 'Банкке кіруге өту'
       : 'Ко входу в банк';
+
+  String get saveAndReturnButton => isKk
+      ? 'Сақтап, оралу'
+      : 'Сохранить и вернуться';
+
+  String get demoLoginBadge => isKk
+      ? 'Кірудің демо-режимі'
+      : 'Демо-режим входа';
+
+  String get editButton => isKk ? 'Өзгерту' : 'Изменить';
 
   String get startCalibrationButton => isKk
       ? 'Калибрлеуді бастау'
@@ -225,6 +243,10 @@ class AppStrings {
       ? 'Телефон нөмірін енгізіңіз'
       : 'Пожалуйста, введите номер телефона';
 
+  String get phoneIncompleteError => isKk
+      ? 'Телефон нөмірін толық енгізіңіз (мысалы: +7 707 123-45-67)'
+      : 'Введите номер телефона полностью (например: +7 707 123-45-67)';
+
   String get codeValidationError => isKk
       ? 'ЖСН немесе SMS-кодты енгізіңіз'
       : 'Пожалуйста, введите ИИН или код из SMS';
@@ -262,6 +284,71 @@ class AppStrings {
       ? 'BCC Рахмет депозиті — жылдық 14.5% дейін'
       : 'Депозит BCC Рахмет — до 14.5% годовых';
   String get closeButton => isKk ? 'Жабу' : 'Закрыть';
+
+  String get allServicesExpandTitle =>
+      isKk ? 'Барлық қызметтер' : 'Все услуги банка';
+
+  String get prefilledBillBadge =>
+      isKk ? 'Алдын ала толтырылған шот' : 'Предзаполненный счёт';
+
+  String get availableOnCardLabel =>
+      isKk ? '#bcc картасында қолжетімді:' : 'Доступно на #bcc карте:';
+
+  String get balanceAfterTransferLabel =>
+      isKk ? 'Аударымнан кейін қалады:' : 'Останется после перевода:';
+
+  String insufficientFundsWithBalanceTemplate(String available) => isKk
+      ? '#bcc картасында қаражат жеткіліксіз. Қолжетімді: $available'
+      : 'Недостаточно средств на #bcc карте. Доступно: $available';
+
+  String get transferStepRecipient => isKk ? '1. Алушы' : '1. Получатель';
+  String get transferStepAmount => isKk ? '2. Сома' : '2. Сумма';
+  String get transferStepReview =>
+      isKk ? '3. Тексеру және жіберу' : '3. Проверка и отправка';
+
+  String get antiFraudReadyToConfirm => isKk
+      ? 'Тексеру аяқталды — растауға болады'
+      : 'Проверка завершена — можно подтвердить';
+
+  String get voiceRecognizedPrefix =>
+      isKk ? 'Сіз айттыңыз:' : 'Вы сказали:';
+
+  String get voiceNotUnderstoodNotice => isKk
+      ? 'Соманы немесе алушыны анық есту мүмкін болмады. Қайталап көріңіз немесе өрістерді қолмен толтырыңыз.'
+      : 'Не удалось расслышать сумму или получателя. Попробуйте ещё раз или заполните поля вручную.';
+
+  String voicePartialAmountOnlyTemplate(String formattedAmount) => isKk
+      ? 'Тек сома танылды: $formattedAmount. Алушы көрсетілмеген — соманы қолданып, алушыны таңдаңыз.'
+      : 'Распознана только сумма: $formattedAmount. Получатель не указан — примените сумму и выберите получателя.';
+
+  String voicePartialRecipientOnlyTemplate(String recipient) => isKk
+      ? 'Тек алушы танылды: $recipient. Сома көрсетілмеген — алушыны қолданып, соманы енгізіңіз.'
+      : 'Распознан только получатель: $recipient. Сумма не указана — примените получателя и введите сумму.';
+
+  String get applyButton => isKk ? 'Қолдану' : 'Применить';
+  String get retryVoiceButton => isKk ? 'Қайталау' : 'Повторить';
+
+  String get micPermissionBlockedTransferNotice => isKk
+      ? 'Микрофонға рұқсат берілмеді. Телефон баптауларынан рұқсат беріңіз немесе мысалды таңдаңыз.'
+      : 'Нет доступа к микрофону. Разрешите доступ в настройках телефона или выберите пример ниже.';
+
+  String get holdReleasedTooEarlyHint => isKk
+      ? 'Саусағыңызды жібермеңіз — батырманы 1,5 секунд басып тұрыңыз'
+      : 'Не отпускайте палец — удерживайте кнопку 1,5 секунды';
+
+  String get confirmWithoutHoldButton => isKk
+      ? 'Ұстамай растау (код арқылы)'
+      : 'Подтвердить без удержания (по коду)';
+
+  String get confirmCodeDialogTitle =>
+      isKk ? 'Код арқылы растау' : 'Подтверждение по коду';
+
+  String get confirmCodeDialogDemoHint => isKk
+      ? 'Растау демо-коды: 4829. Басып тұрмай-ақ аударымды осы кодпен растауға болады.'
+      : 'Демо-код подтверждения: 4829. Можно подтвердить перевод одним нажатием без удержания.';
+
+  String get confirmWithCodeAction =>
+      isKk ? '4829 кодымен растау' : 'Подтвердить кодом 4829';
 
   // ---------------------------------------------------------------------------
   // Screen 5: Transfer Screen, Voice Filler & Anti-Fraud
@@ -346,12 +433,24 @@ class AppStrings {
   String get livePreviewTitle => isKk
       ? 'Экран үлгісі'
       : 'Пример экрана';
+  String get previewBadge => isKk ? 'Алдын ала көру' : 'Предпросмотр';
   String get recalibrateThreeStepsButton => isKk
       ? 'Банкті қайта ыңғайлау'
       : 'Подобрать удобный вид заново';
   String get resetToStandardBccButton => isKk
       ? 'Әдеттегі көрініске қайту'
       : 'Вернуть обычный вид';
+  String get quickResetAccessibilityButton => isKk
+      ? 'Қолжетімділік баптауларын қалпына келтіру'
+      : 'Сбросить настройки доступности';
+  String get standardModeActiveStatus => isKk
+      ? 'BCC әдеттегі режимі қосулы'
+      : 'Обычный режим BCC уже активен';
+  String get accessibilityResetDoneNotice => isKk
+      ? 'Қолжетімділік баптаулары қалпына келтірілді'
+      : 'Настройки доступности сброшены';
+  String get undoButton => isKk ? 'Болдырмау' : 'Отменить';
+  String get doneButton => isKk ? 'Дайын' : 'Готово';
 
   String get motorShortStandard => isKk ? 'Стандартты' : 'Стандарт';
   String get motorShortEnlarged =>
@@ -386,7 +485,7 @@ class AppStrings {
 
   String get recentTransactionsTitle => isKk
       ? 'Соңғы операциялар'
-      : 'История операций';
+      : 'Последние операции';
 
   // ---------------------------------------------------------------------------
   // Transfers & Voice Assistant

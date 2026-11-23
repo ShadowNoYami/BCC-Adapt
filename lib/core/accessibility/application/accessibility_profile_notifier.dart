@@ -111,6 +111,11 @@ class AccessibilityProfileNotifier extends AsyncNotifier<AccessibilityProfile> {
   /// Full reset to the standard BCC interface.
   Future<void> resetToStandard() => _update(AccessibilityRulesEngine.reset);
 
+  /// Atomically restores a previously captured [AccessibilityProfile] snapshot
+  /// (used for instant Undo after resetting accessibility settings).
+  Future<void> restoreProfile(AccessibilityProfile snapshot) =>
+      _update((_) => snapshot);
+
   /// Applies a profile received from cloud sync. The local screen-reader
   /// flag always wins — it reflects this particular device.
   Future<void> importFromJson(Map<String, Object?> json) => _update((p) =>

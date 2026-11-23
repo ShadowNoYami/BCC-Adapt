@@ -67,15 +67,20 @@ class _AdaptiveCardState extends ConsumerState<AdaptiveCard> {
     final scheme = Theme.of(context).colorScheme;
 
     final isHc = profile.isHighContrast;
+    final isInteractive = widget.onTap != null;
     final resolvedBorderWidth = widget.selected
         ? (isHc ? 3.5 : 2.5)
-        : (isHc ? tokens.borderWidth : 1.0);
+        : (isHc ? tokens.borderWidth : (isInteractive ? 1.25 : 1.0));
 
     final resolvedBorderColor =
         widget.borderColor ??
         (widget.selected
             ? (profile.isDark ? tokens.emphasis : scheme.primary)
-            : (isHc ? scheme.outline : scheme.outlineVariant));
+            : (isHc
+                  ? scheme.outline
+                  : (isInteractive
+                        ? scheme.outline.withValues(alpha: 0.55)
+                        : scheme.outlineVariant)));
 
     final resolvedBg =
         widget.backgroundColor ??
@@ -89,7 +94,7 @@ class _AdaptiveCardState extends ConsumerState<AdaptiveCard> {
     final outerMargin =
         widget.margin ??
         (profile.motorLevel == MotorAssistanceLevel.tremorProtection &&
-                widget.onTap != null
+                isInteractive
             ? const EdgeInsets.symmetric(vertical: 8)
             : EdgeInsets.zero);
 
@@ -97,7 +102,7 @@ class _AdaptiveCardState extends ConsumerState<AdaptiveCard> {
 
     Widget content = Container(
       constraints: BoxConstraints(
-        minHeight: widget.onTap != null ? profile.minTouchTarget : 0,
+        minHeight: isInteractive ? profile.minTouchTarget : 0,
       ),
       padding: effectivePadding,
       child: widget.child,
@@ -110,6 +115,10 @@ class _AdaptiveCardState extends ConsumerState<AdaptiveCard> {
       content = InkWell(
         borderRadius: borderRadius,
         onTap: onTap,
+        splashColor: scheme.primary.withValues(alpha: 0.14),
+        highlightColor: scheme.primary.withValues(alpha: 0.07),
+        hoverColor: scheme.primary.withValues(alpha: 0.05),
+        focusColor: Theme.of(context).focusColor,
         excludeFromSemantics: true,
         child: content,
       );
@@ -128,8 +137,10 @@ class _AdaptiveCardState extends ConsumerState<AdaptiveCard> {
         hint: widget.semanticHint,
         child: Material(
           color: resolvedBg,
-          elevation: isHc ? 0 : (widget.selected ? 2 : 0.5),
-          shadowColor: Colors.black.withValues(alpha: 0.08),
+          elevation: isHc
+              ? 0
+              : (widget.selected ? 2.5 : (isInteractive ? 2.0 : 0.5)),
+          shadowColor: Colors.black.withValues(alpha: isInteractive ? 0.12 : 0.06),
           shape: RoundedRectangleBorder(
             borderRadius: borderRadius,
             side: BorderSide(

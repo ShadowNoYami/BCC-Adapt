@@ -23,7 +23,15 @@ enum _MotorFeedback { none, hit, miss }
 ///
 /// Rebuilds the entire interface in real time as the user selects options.
 class CalibrationScreen extends ConsumerStatefulWidget {
-  const CalibrationScreen({super.key});
+  const CalibrationScreen({
+    super.key,
+    this.fromSettings = false,
+  });
+
+  /// Whether calibration was launched from [AccessibilitySettingsScreen] rather
+  /// than initial onboarding. When true, saving returns via `Navigator.pop`
+  /// without resetting onboarding state.
+  final bool fromSettings;
 
   @override
   ConsumerState<CalibrationScreen> createState() => _CalibrationScreenState();
@@ -191,7 +199,11 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
   Future<void> _finishCalibration() async {
     await ref.read(voiceSessionProvider.notifier).stopAll();
     if (!mounted) return;
-    await Navigator.of(context).pushNamed(AppRoutes.registration);
+    if (widget.fromSettings) {
+      Navigator.of(context).pop();
+    } else {
+      await Navigator.of(context).pushNamed(AppRoutes.registration);
+    }
   }
 
   @override
@@ -202,33 +214,55 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(strings.calibrationTitle, softWrap: true),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
-          tooltip: strings.backButton,
-          onPressed: () {
-            if (_step > 0) {
-              _goToStep(_step - 1);
-            } else {
-              Navigator.of(context).maybePop();
-            }
-          },
+    return PopScope(
+      canPop: _step == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _step > 0) {
+          _goToStep(_step - 1);
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(strings.calibrationTitle, softWrap: true),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_rounded),
+            tooltip: strings.backButton,
+            onPressed: () {
+              if (_step > 0) {
+                _goToStep(_step - 1);
+              } else {
+                Navigator.of(context).maybePop();
+              }
+            },
+          ),
         ),
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          controller: _scrollController,
-          padding: EdgeInsets.all(tokens.spacingUnit * 2),
+        body: SafeArea(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Step progress
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
+              // Pinned step progress bar outside scroll
+              Container(
+                padding: EdgeInsets.fromLTRB(
+                  tokens.spacingUnit * 2,
+                  tokens.spacingUnit * 1.25,
+                  tokens.spacingUnit * 2,
+                  tokens.spacingUnit * 1.25,
+                ),
+                decoration: BoxDecoration(
+                  color: scheme.surface,
+                  border: Border(
+                    bottom: BorderSide(
+                      color: profile.isHighContrast
+                          ? scheme.outline
+                          : scheme.outlineVariant,
+                      width: profile.isHighContrast ? tokens.borderWidth : 1,
+                    ),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
                       strings.stepProgress(_step + 1, 3),
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w700,
@@ -236,36 +270,51 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
                       ),
                       softWrap: true,
                     ),
-                  ),
-                ],
-              ),
-              SizedBox(height: tokens.spacingUnit),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: LinearProgressIndicator(
-                  value: (_step + 1) / 3,
-                  minHeight: 10,
-                  backgroundColor: scheme.surfaceContainerHighest,
+                    SizedBox(height: tokens.spacingUnit * 0.75),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: LinearProgressIndicator(
+                        value: (_step + 1) / 3,
+                        minHeight: 10,
+                        backgroundColor: scheme.surfaceContainerHighest,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              SizedBox(height: tokens.spacingUnit * 2.5),
+              Expanded(
+                child: SingleChildScrollView(
+                  controller: _scrollController,
+                  padding: EdgeInsets.all(tokens.spacingUnit * 2),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      VoiceGuideHeader(
+                        promptText: _stepVoicePrompt(strings),
+                        alwaysShow: true,
+                      ),
+                      SizedBox(height: tokens.spacingUnit * 2),
 
-              // Step body
-              if (_step == 0)
-                _buildVisionStep(context, strings, tokens, profile),
-              if (_step == 1)
-                _buildMotorStep(context, strings, tokens, profile),
-              if (_step == 2)
-                _buildCognitiveAndVoiceStep(context, strings, tokens, profile),
+                      // Step body
+                      if (_step == 0)
+                        _buildVisionStep(context, strings, tokens, profile),
+                      if (_step == 1)
+                        _buildMotorStep(context, strings, tokens, profile),
+                      if (_step == 2)
+                        _buildCognitiveAndVoiceStep(
+                          context,
+                          strings,
+                          tokens,
+                          profile,
+                        ),
 
-              SizedBox(height: tokens.spacingUnit * 3),
+                      SizedBox(height: tokens.spacingUnit * 3),
 
-              // Step navigation actions
-              _buildFooterButtons(strings, tokens),
-              SizedBox(height: tokens.spacingUnit * 2),
-              VoiceGuideHeader(
-                promptText: _stepVoicePrompt(strings),
-                alwaysShow: true,
+                      // Step navigation actions
+                      _buildFooterButtons(strings, tokens),
+                    ],
+                  ),
+                ),
               ),
             ],
           ),
@@ -392,8 +441,13 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
   ) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final isTremor =
-        profile.motorLevel == MotorAssistanceLevel.tremorProtection;
+    final motorLevel = profile.motorLevel;
+    final hitAfterMiss =
+        _motorFeedback == _MotorFeedback.hit &&
+        _missedTaps > 0 &&
+        motorLevel == MotorAssistanceLevel.tremorProtection;
+    final isWarningBanner =
+        _motorFeedback == _MotorFeedback.miss || hitAfterMiss;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -427,9 +481,7 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
               color: scheme.surfaceContainerHighest,
               borderRadius: BorderRadius.circular(tokens.cornerRadius),
               border: Border.all(
-                color: _motorFeedback == _MotorFeedback.miss
-                    ? tokens.warning
-                    : scheme.outline,
+                color: isWarningBanner ? tokens.warning : scheme.outline,
                 width: profile.isHighContrast ? tokens.borderWidth : 1.5,
               ),
             ),
@@ -450,29 +502,27 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
           Semantics(
             liveRegion: true,
             child: AdaptiveCard(
-              borderColor: _motorFeedback == _MotorFeedback.miss
-                  ? tokens.warning
-                  : tokens.success,
+              borderColor: isWarningBanner ? tokens.warning : tokens.success,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   ExcludeSemantics(
                     child: Icon(
-                      _motorFeedback == _MotorFeedback.miss
+                      isWarningBanner
                           ? Icons.shield_rounded
                           : Icons.check_circle_rounded,
-                      color: _motorFeedback == _MotorFeedback.miss
-                          ? tokens.warning
-                          : tokens.success,
+                      color: isWarningBanner ? tokens.warning : tokens.success,
                       size: tokens.iconSize,
                     ),
                   ),
                   SizedBox(width: tokens.spacingUnit * 1.5),
                   Expanded(
                     child: Text(
-                      _motorFeedback == _MotorFeedback.miss
-                          ? strings.motorMissFeedback
-                          : strings.motorHitFeedback,
+                      hitAfterMiss
+                          ? strings.motorHitAfterMissFeedback
+                          : (_motorFeedback == _MotorFeedback.miss
+                                ? strings.motorMissFeedback
+                                : strings.motorHitFeedback),
                       style: theme.textTheme.bodyLarge?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
@@ -487,24 +537,45 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
 
         SizedBox(height: tokens.spacingUnit * 2),
 
-        // Honest 2-choice selector
+        // Explicit 3-choice selector: Standard, Enlarged without hold, Tremor protection
         AdaptiveCard(
-          selected: !isTremor,
+          selected: motorLevel == MotorAssistanceLevel.standard,
           semanticLabel: strings.motorChoiceStandard,
           onTap: () {
-            setState(() => _motorFeedback = _MotorFeedback.none);
+            setState(() {
+              _missedTaps = 0;
+              _motorFeedback = _MotorFeedback.none;
+            });
             ref
                 .read(accessibilityProfileProvider.notifier)
                 .setMotorLevel(MotorAssistanceLevel.standard);
           },
           child: _ChoiceRow(
-            selected: !isTremor,
+            selected: motorLevel == MotorAssistanceLevel.standard,
             title: strings.motorChoiceStandard,
           ),
         ),
         SizedBox(height: tokens.spacingUnit * 1.5),
         AdaptiveCard(
-          selected: isTremor,
+          selected: motorLevel == MotorAssistanceLevel.enlargedTargets,
+          semanticLabel: strings.motorChoiceEnlarged,
+          onTap: () {
+            setState(() {
+              _missedTaps = 0;
+              _motorFeedback = _MotorFeedback.none;
+            });
+            ref
+                .read(accessibilityProfileProvider.notifier)
+                .setMotorLevel(MotorAssistanceLevel.enlargedTargets);
+          },
+          child: _ChoiceRow(
+            selected: motorLevel == MotorAssistanceLevel.enlargedTargets,
+            title: strings.motorChoiceEnlarged,
+          ),
+        ),
+        SizedBox(height: tokens.spacingUnit * 1.5),
+        AdaptiveCard(
+          selected: motorLevel == MotorAssistanceLevel.tremorProtection,
           semanticLabel: strings.motorChoiceTremor,
           onTap: () {
             ref
@@ -512,7 +583,7 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
                 .setMotorLevel(MotorAssistanceLevel.tremorProtection);
           },
           child: _ChoiceRow(
-            selected: isTremor,
+            selected: motorLevel == MotorAssistanceLevel.tremorProtection,
             title: strings.motorChoiceTremor,
           ),
         ),
@@ -615,7 +686,9 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
         AdaptiveActionButton(
           key: ValueKey(_step),
           label: _step == 2
-              ? strings.finishCalibrationButton
+              ? (widget.fromSettings
+                    ? strings.saveAndReturnButton
+                    : strings.finishCalibrationButton)
               : strings.nextButton,
           icon: _step == 2
               ? Icons.check_circle_outline_rounded
@@ -799,7 +872,11 @@ class _ContrastBgChip extends StatelessWidget {
           minimumSize: const Size(48, 48),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           side: BorderSide(
-            color: selected ? const Color(0xFF00A859) : chipFg,
+            color: selected
+                ? (chipBg == const Color(0xFF0A0A0A)
+                      ? AppPalette.highContrastDark.primary
+                      : AppPalette.bccEmeraldAccessible)
+                : chipFg,
             width: selected ? 3 : 1.5,
           ),
           shape: RoundedRectangleBorder(

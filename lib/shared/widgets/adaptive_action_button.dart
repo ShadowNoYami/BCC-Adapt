@@ -156,6 +156,24 @@ class _AdaptiveActionButtonState extends ConsumerState<AdaptiveActionButton> {
         }
         return fg;
       }),
+      overlayColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.focused)) {
+          return theme.focusColor;
+        }
+        if (states.contains(WidgetState.pressed)) {
+          return fg.withValues(alpha: 0.12);
+        }
+        return null;
+      }),
+      side: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.focused)) {
+          return BorderSide(
+            color: profile.isDark ? tokens.emphasis : scheme.primary,
+            width: profile.isHighContrast ? tokens.borderWidth + 1.5 : 2.5,
+          );
+        }
+        return side;
+      }),
       minimumSize: WidgetStateProperty.all(
         Size(widget.expandWidth ? double.infinity : motorMinSize, minHeight),
       ),
@@ -163,7 +181,6 @@ class _AdaptiveActionButtonState extends ConsumerState<AdaptiveActionButton> {
       shape: WidgetStateProperty.all(
         RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(tokens.cornerRadius),
-          side: side,
         ),
       ),
       elevation: WidgetStateProperty.all(
