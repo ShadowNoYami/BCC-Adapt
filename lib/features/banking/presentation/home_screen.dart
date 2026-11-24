@@ -342,23 +342,19 @@ class _HomeTopHeader extends ConsumerWidget {
               SizedBox(width: tokens.spacingUnit),
               const LanguageSwitchButton(compact: true),
               SizedBox(width: tokens.spacingUnit),
-              Semantics(
-                button: true,
-                label: accessibilityLabel,
-                child: IconButton(
-                  tooltip: accessibilityLabel,
-                  onPressed: onOpenAccessibility,
-                  style: IconButton.styleFrom(
-                    minimumSize: const Size(48, 48),
-                    backgroundColor: scheme.surface,
-                    foregroundColor: scheme.onSurface,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      side: BorderSide(color: scheme.outlineVariant),
-                    ),
+              IconButton(
+                tooltip: accessibilityLabel,
+                onPressed: onOpenAccessibility,
+                style: IconButton.styleFrom(
+                  minimumSize: const Size(48, 48),
+                  backgroundColor: scheme.surface,
+                  foregroundColor: scheme.onSurface,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: BorderSide(color: scheme.outlineVariant),
                   ),
-                  icon: const Icon(Icons.accessibility_new_rounded),
                 ),
+                icon: const Icon(Icons.accessibility_new_rounded),
               ),
             ],
           )

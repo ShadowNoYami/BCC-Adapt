@@ -95,7 +95,10 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
     _cancelZeroTouchPrompt();
     await ref.read(voiceSessionProvider.notifier).stopAll();
     if (!mounted) return;
-    await Navigator.of(context).pushNamed(AppRoutes.registration);
+    await Navigator.of(context).pushNamed(
+      AppRoutes.registration,
+      arguments: true,
+    );
   }
 
   Future<void> _playWelcomeHint(AppStrings strings) async {

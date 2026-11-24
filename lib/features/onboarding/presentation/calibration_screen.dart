@@ -200,7 +200,7 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
     await ref.read(voiceSessionProvider.notifier).stopAll();
     if (!mounted) return;
     if (widget.fromSettings) {
-      Navigator.of(context).pop();
+      Navigator.of(context).pop(true);
     } else {
       await Navigator.of(context).pushNamed(AppRoutes.registration);
     }
@@ -263,7 +263,8 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      strings.stepProgress(_step + 1, 3),
+                      '${_step + 1} / 3',
+                      semanticsLabel: strings.stepProgress(_step + 1, 3),
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w700,
                         color: tokens.accentText,

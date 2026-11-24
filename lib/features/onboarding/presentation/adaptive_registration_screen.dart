@@ -22,7 +22,9 @@ import '../../../shared/widgets/voice_guide_header.dart';
 ///   boxes (`Column`) instead of inside `InputDecoration`, preventing clipping.
 /// * Includes a 1-tap demo auto-fill button for rapid hackathon walkthroughs.
 class AdaptiveRegistrationScreen extends ConsumerStatefulWidget {
-  const AdaptiveRegistrationScreen({super.key});
+  const AdaptiveRegistrationScreen({super.key, this.useStandardMode = false});
+
+  final bool useStandardMode;
 
   @override
   ConsumerState<AdaptiveRegistrationScreen> createState() =>
@@ -166,7 +168,12 @@ class _AdaptiveRegistrationScreenState
       _codeError = null;
     });
     await ref.read(voiceSessionProvider.notifier).stopAll();
-    await ref.read(accessibilityProfileProvider.notifier).completeOnboarding();
+    final notifier = ref.read(accessibilityProfileProvider.notifier);
+    if (widget.useStandardMode) {
+      await notifier.resetToStandard();
+    } else {
+      await notifier.completeOnboarding();
+    }
     if (!mounted) return;
     await Navigator.of(context)
         .pushNamedAndRemoveUntil(AppRoutes.home, (_) => false);

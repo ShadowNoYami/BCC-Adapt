@@ -1,7 +1,11 @@
 /// Converts monetary amounts into words (RU / KK) for visual and spoken
 /// double-checking before a transfer: `100000` -> "Сто тысяч тенге".
 abstract final class AmountInWords {
-  static String format(num amount, {String localeCode = 'ru'}) {
+  static String format(
+    num amount, {
+    String localeCode = 'ru',
+    bool tiynInWords = false,
+  }) {
     final safe = amount.isFinite && amount >= 0 ? amount : 0;
     final totalTiyn = (safe * 100).round();
     final whole = totalTiyn ~/ 100;
@@ -11,8 +15,22 @@ abstract final class AmountInWords {
     final words = isKk ? _kk(whole) : _ru(whole);
     final currency = isKk ? 'теңге' : 'тенге';
     final buffer = StringBuffer('${_capitalize(words)} $currency');
-    if (tiyn > 0) buffer.write(' $tiyn тиын');
+    if (tiyn > 0) {
+      final tiynText = tiynInWords ? (isKk ? _kk(tiyn) : _ru(tiyn)) : '$tiyn';
+      buffer.write(' $tiynText тиын');
+    }
     return buffer.toString();
+  }
+
+  /// Converts a non-negative integer into lowercase words for Russian (`ru`)
+  /// or Kazakh (`kk`), e.g. `245800` -> `"екі жүз қырық бес мың сегіз жүз"`.
+  static String integerToWords(int value, {String localeCode = 'ru'}) {
+    final isKk = localeCode == 'kk';
+    if (value < 0) {
+      final prefix = 'минус ';
+      return '$prefix${integerToWords(-value, localeCode: localeCode)}';
+    }
+    return isKk ? _kk(value) : _ru(value);
   }
 
   // ---------------------------------------------------------------------------

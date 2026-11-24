@@ -77,6 +77,7 @@ class AccessibilitySettingsScreen extends ConsumerWidget {
     );
     final hasAdaptations = _hasActiveAdaptations(profile);
     final viewportHeight = MediaQuery.sizeOf(context).height;
+    final previewHeightFraction = 0.45 + (profile.textScaleFactor - 1) * 0.2;
 
     return Scaffold(
       appBar: AppBar(title: Text(strings.a11ySettingsTitle, softWrap: true)),
@@ -86,7 +87,9 @@ class AccessibilitySettingsScreen extends ConsumerWidget {
           children: [
             // Pinned top quick-reset + compact live preview (no scrolling needed)
             ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: viewportHeight * 0.45),
+              constraints: BoxConstraints(
+                maxHeight: viewportHeight * previewHeightFraction,
+              ),
               child: Container(
                 decoration: BoxDecoration(
                   color: scheme.surface,
@@ -431,9 +434,16 @@ class AccessibilitySettingsScreen extends ConsumerWidget {
                       onPressed: () async {
                         await ref.read(voiceSessionProvider.notifier).stopAll();
                         if (!context.mounted) return;
-                        await Navigator.of(
-                          context,
-                        ).pushNamed(AppRoutes.calibration, arguments: true);
+                        final navigator = Navigator.of(context);
+                        final saved = await navigator.pushNamed<bool>(
+                          AppRoutes.calibration,
+                          arguments: true,
+                        );
+                        if (saved == true &&
+                            context.mounted &&
+                            navigator.canPop()) {
+                          navigator.pop();
+                        }
                       },
                     ),
                     SizedBox(height: tokens.spacingUnit * 1.5),

@@ -23,7 +23,7 @@ abstract final class AppRoutes {
           settings: settings,
           builder: (_) => const WelcomeScreen(),
         ),
-      calibration => MaterialPageRoute<void>(
+      calibration => MaterialPageRoute<bool>(
           settings: settings,
           builder: (_) => CalibrationScreen(
             fromSettings:
@@ -32,7 +32,9 @@ abstract final class AppRoutes {
         ),
       registration => MaterialPageRoute<void>(
           settings: settings,
-          builder: (_) => const AdaptiveRegistrationScreen(),
+          builder: (_) => AdaptiveRegistrationScreen(
+            useStandardMode: settings.arguments == true,
+          ),
         ),
       transfer => MaterialPageRoute<void>(
           settings: settings,

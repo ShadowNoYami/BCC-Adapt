@@ -51,6 +51,7 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
   final _draftKey = GlobalKey();
   final _phoneFieldKey = GlobalKey();
   final _amountFieldKey = GlobalKey();
+  final _holdControlsKey = GlobalKey();
 
   QuickContact? _selectedContact;
   String? _phoneError;
@@ -142,8 +143,8 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
   ) {
     final amountTiyn = MoneyFormatter.toTiyn(_parsedAmount);
     if (amountTiyn <= 0 || !_isStrangerRecipient(bankRepo)) return false;
-    if (profile.isSimplifiedUi) return true;
-    // Standard / fullBanking enforces the 5s block only on large transfers
+    if (profile.isSimplifiedUi || profile.requiresHoldToConfirm) return true;
+    // Standard mode enforces the 5s block only on large transfers
     // (>= 150 000 ₸) while keeping a non-blocking warning below that threshold.
     return amountTiyn >= 15000000;
   }
@@ -420,12 +421,19 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
     }
   }
 
-  void _scrollToKey(GlobalKey key) {
+  void _scrollToKey(GlobalKey key, {bool showWholeTarget = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final target = key.currentContext;
       if (target != null && target.mounted) {
+        if (showWholeTarget) {
+          final viewportHeight = Scrollable.of(target).position.viewportDimension;
+          if (target.size!.height > viewportHeight) return;
+        }
         Scrollable.ensureVisible(
           target,
+          alignmentPolicy: showWholeTarget
+              ? ScrollPositionAlignmentPolicy.keepVisibleAtEnd
+              : ScrollPositionAlignmentPolicy.explicit,
           duration: const Duration(milliseconds: 350),
           curve: Curves.easeOutCubic,
         );
@@ -693,6 +701,7 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
 
     final isCompactStandard = _isCompactStandard(profile);
     final showAntiFraud = _requiresAntiFraudCooling(profile, bankNotifier);
+    final isCoolingComplete = showAntiFraud && _coolingCompleted;
     final showSoftStrangerWarning =
         !showAntiFraud &&
         _isStrangerRecipient(bankNotifier) &&
@@ -1221,7 +1230,9 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                             );
                             return RegExp(r'^\d{0,9}(?:[.,]\d{0,2})?$')
                                     .hasMatch(ungrouped)
-                                ? newValue
+                                ? newValue.copyWith(
+                                    text: newValue.text.replaceAll('.', ','),
+                                  )
                                 : oldValue;
                           }),
                         ],
@@ -1335,7 +1346,8 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                   liveRegion: true,
                   container: true,
                   label:
-                      '${strings.antiFraudStrangerTitle}. ${strings.antiFraudStrangerBody}',
+                      '${strings.antiFraudStrangerTitle}. ${strings.antiFraudStrangerBody}'
+                      '${isCoolingComplete ? ' ${strings.antiFraudReadyToConfirm}' : ''}',
                   excludeSemantics: true,
                   child: AdaptiveCard(
                     backgroundColor: scheme.surfaceContainerHighest,
@@ -1372,9 +1384,7 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                           ),
                           softWrap: true,
                         ),
-                        if (showAntiFraud &&
-                            _coolingSecondsRemaining == 0 &&
-                            _coolingCompleted) ...[
+                        if (isCoolingComplete) ...[
                           SizedBox(height: tokens.spacingUnit * 1.25),
                           Row(
                             children: [
@@ -1461,81 +1471,88 @@ class _TransferScreenState extends ConsumerState<TransferScreen> {
                     onPressed: null,
                   ),
                 )
-              else if (profile.requiresHoldToConfirm) ...[
-                _HoldToConfirmButton(
-                  key: ValueKey(_draft),
-                  idleLabel: strings.sendTransferButton,
-                  instruction: strings.holdToConfirmHint,
-                  activeLabel: strings.holdToConfirmActiveLabel,
-                  duration: profile.holdToConfirmDuration,
-                  isHighContrast: profile.isHighContrast,
-                  onBeforeHoldStart: _validateDraft,
-                  onEarlyRelease: () {
-                    HapticFeedback.lightImpact();
-                    HapticFeedback.lightImpact();
-                    setState(() {
-                      _earlyReleaseHint = strings.holdReleasedTooEarlyHint;
-                    });
-                    if (profile.voiceAssistantEnabled) {
-                      ref
-                          .read(voiceSessionProvider.notifier)
-                          .speak(
-                            strings.holdReleasedTooEarlyHint,
-                            context: context,
-                          );
-                    }
-                  },
-                  onConfirmed: _executeTransfer,
-                  onAccessibleConfirm: _confirmWithAssistiveInput,
-                ),
-                if (_earlyReleaseHint != null) ...[
-                  SizedBox(height: tokens.spacingUnit),
-                  Semantics(
-                    liveRegion: true,
-                    child: Container(
-                      padding: EdgeInsets.all(tokens.spacingUnit * 1.25),
-                      decoration: BoxDecoration(
-                        color: scheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: tokens.warning),
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          ExcludeSemantics(
-                            child: Icon(
-                              Icons.touch_app_rounded,
-                              color: tokens.warning,
-                              size: tokens.iconSize,
-                            ),
+              else if (profile.requiresHoldToConfirm)
+                Column(
+                  key: _holdControlsKey,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _HoldToConfirmButton(
+                      key: ValueKey(_draft),
+                      idleLabel: strings.sendTransferButton,
+                      instruction: strings.holdToConfirmHint,
+                      activeLabel: strings.holdToConfirmActiveLabel,
+                      duration: profile.holdToConfirmDuration,
+                      isHighContrast: profile.isHighContrast,
+                      onBeforeHoldStart: _validateDraft,
+                      onEarlyRelease: () {
+                        HapticFeedback.lightImpact();
+                        HapticFeedback.lightImpact();
+                        setState(() {
+                          _earlyReleaseHint = strings.holdReleasedTooEarlyHint;
+                        });
+                        _scrollToKey(_holdControlsKey, showWholeTarget: true);
+                        if (profile.voiceAssistantEnabled) {
+                          ref
+                              .read(voiceSessionProvider.notifier)
+                              .speak(
+                                strings.holdReleasedTooEarlyHint,
+                                context: context,
+                              );
+                        }
+                      },
+                      onConfirmed: _executeTransfer,
+                      onAccessibleConfirm: _confirmWithAssistiveInput,
+                    ),
+                    if (_earlyReleaseHint != null) ...[
+                      SizedBox(height: tokens.spacingUnit),
+                      Semantics(
+                        liveRegion: true,
+                        child: Container(
+                          padding: EdgeInsets.all(tokens.spacingUnit * 1.25),
+                          decoration: BoxDecoration(
+                            color: scheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: tokens.warning),
                           ),
-                          SizedBox(width: tokens.spacingUnit),
-                          Expanded(
-                            child: Text(
-                              _earlyReleaseHint!,
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                fontWeight: FontWeight.w700,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              ExcludeSemantics(
+                                child: Icon(
+                                  Icons.touch_app_rounded,
+                                  color: tokens.warning,
+                                  size: tokens.iconSize,
+                                ),
                               ),
-                              softWrap: true,
-                            ),
+                              SizedBox(width: tokens.spacingUnit),
+                              Expanded(
+                                child: Text(
+                                  _earlyReleaseHint!,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                  softWrap: true,
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
+                      ),
+                    ],
+                    SizedBox(height: tokens.spacingUnit),
+                    Center(
+                      child: TextButton.icon(
+                        onPressed: _confirmWithCodeDialog,
+                        icon: const Icon(Icons.password_rounded),
+                        label: Text(
+                          strings.confirmWithoutHoldButton,
+                          softWrap: true,
+                        ),
                       ),
                     ),
-                  ),
-                ],
-                SizedBox(height: tokens.spacingUnit),
-                Center(
-                  child: TextButton.icon(
-                    onPressed: _confirmWithCodeDialog,
-                    icon: const Icon(Icons.password_rounded),
-                    label: Text(
-                      strings.confirmWithoutHoldButton,
-                      softWrap: true,
-                    ),
-                  ),
-                ),
-              ] else
+                  ],
+                )
+              else
                 AdaptiveActionButton(
                   label: strings.sendTransferButton,
                   icon: Icons.check_circle_rounded,

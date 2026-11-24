@@ -5,6 +5,8 @@
 /// "бес мың", "екі мың бес жүз") and mixed forms ("5 тысяч", "2 мың").
 library;
 
+import 'amount_in_words.dart';
+
 enum NumberTokenKind {
   /// 0..9 (and "полтора/полторы" = 1.5).
   unit,
@@ -251,5 +253,124 @@ abstract final class NumberLexicon {
   static NumberSpan? _finish(double total, double group, int start, int end) {
     if (end == start) return null;
     return NumberSpan(value: total + group, start: start, endExclusive: end);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Number-to-words helpers for TTS normalisation (KK / RU)
+  // ---------------------------------------------------------------------------
+
+  static const List<String> kkDigits = [
+    'нөл',
+    'бір',
+    'екі',
+    'үш',
+    'төрт',
+    'бес',
+    'алты',
+    'жеті',
+    'сегіз',
+    'тоғыз',
+  ];
+
+  static const List<String> ruDigits = [
+    'ноль',
+    'один',
+    'два',
+    'три',
+    'четыре',
+    'пять',
+    'шесть',
+    'семь',
+    'восемь',
+    'девять',
+  ];
+
+  /// Converts a single digit `0..9` into a spoken word.
+  static String digitToWord(int digit, {String localeCode = 'kk'}) {
+    final safe = digit.clamp(0, 9);
+    return localeCode == 'kk' ? kkDigits[safe] : ruDigits[safe];
+  }
+
+  /// Spells out every ASCII digit in [digits] as space-separated spoken words.
+  static String digitsToWords(String digits, {String localeCode = 'kk'}) {
+    final words = <String>[];
+    for (var i = 0; i < digits.length; i++) {
+      final code = digits.codeUnitAt(i);
+      if (code >= 0x30 && code <= 0x39) {
+        words.add(digitToWord(code - 0x30, localeCode: localeCode));
+      }
+    }
+    return words.join(' ');
+  }
+
+  /// Converts an integer string or value into full spoken words, falling back
+  /// to digit-by-digit spelling for very large numbers (>= 1 trillion).
+  static String intToWords(int value, {String localeCode = 'kk'}) {
+    if (value.abs() >= 1000000000000) {
+      final prefix = value < 0 ? 'минус ' : '';
+      return '$prefix${digitsToWords(value.abs().toString(), localeCode: localeCode)}';
+    }
+    return AmountInWords.integerToWords(value, localeCode: localeCode);
+  }
+
+  /// Kazakh ordinal numeral: `1` -> `"бірінші"`, `2` -> `"екінші"`, `3` -> `"үшінші"`.
+  static String kkOrdinal(int value) {
+    final cardinal = intToWords(value.abs(), localeCode: 'kk');
+    final parts = cardinal.split(' ');
+    final last = parts.last;
+
+    String inflected;
+    if (last == 'жиырма') {
+      inflected = 'жиырмасыншы';
+    } else if (last == 'қырық') {
+      inflected = 'қырқыншы';
+    } else if (_kkEndsWithVowel(last)) {
+      inflected = '$last${_kkIsFrontWord(last) ? 'нші' : 'ншы'}';
+    } else {
+      inflected = '$last${_kkIsFrontWord(last) ? 'інші' : 'ыншы'}';
+    }
+    parts[parts.length - 1] = inflected;
+    return parts.join(' ');
+  }
+
+  /// Kazakh ablative numeral ("from N"): `3` -> `"үштен"`, `5` -> `"бестен"`.
+  static String kkAblative(int value) {
+    final cardinal = intToWords(value.abs(), localeCode: 'kk');
+    final parts = cardinal.split(' ');
+    final last = parts.last;
+    final isFront = _kkIsFrontWord(last);
+    final lastChar = last[last.length - 1];
+
+    String suffix;
+    if (_kkNasals.contains(lastChar)) {
+      suffix = isFront ? 'нен' : 'нан';
+    } else if (_kkVoicelessOrStop.contains(lastChar)) {
+      suffix = isFront ? 'тен' : 'тан';
+    } else {
+      suffix = isFront ? 'ден' : 'дан';
+    }
+    parts[parts.length - 1] = '$last$suffix';
+    return parts.join(' ');
+  }
+
+  static const Set<String> _kkFrontVowels = {'ә', 'е', 'і', 'ө', 'ү'};
+  static const Set<String> _kkBackVowels = {'а', 'о', 'ұ', 'ы'};
+  static const Set<String> _kkVowels = {'ә', 'е', 'і', 'ө', 'ү', 'а', 'о', 'ұ', 'ы'};
+  static const Set<String> _kkNasals = {'м', 'н', 'ң'};
+  static const Set<String> _kkVoicelessOrStop = {
+    'п', 'ф', 'к', 'қ', 'т', 'с', 'ш', 'щ', 'х', 'ц', 'ч', 'б', 'в', 'г', 'д',
+  };
+
+  static bool _kkEndsWithVowel(String word) =>
+      word.isNotEmpty && _kkVowels.contains(word[word.length - 1]);
+
+  static bool _kkIsFrontWord(String word) {
+    if (word == 'елу') return true;
+    for (var i = word.length - 1; i >= 0; i--) {
+      final ch = word[i];
+      if (_kkFrontVowels.contains(ch)) return true;
+      if (_kkBackVowels.contains(ch)) return false;
+    }
+    return false;
   }
 }
